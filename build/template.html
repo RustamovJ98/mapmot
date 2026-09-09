@@ -10,7 +10,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <title>Мото-карта Ташкента</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23e5322d'/%3E%3Ctext x='32' y='42' font-size='30' text-anchor='middle'%3E%F0%9F%8F%8D%3C/text%3E%3C/svg%3E">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="vendor/leaflet.min.css">
 <style>
   :root{
     --bg:#ffffff; --fg:#1a1c1f; --muted:#6b7280; --line:#e5e7eb;
@@ -33,6 +35,8 @@
     padding:8px 12px;width:max-content;max-width:100%}
   .title b{font-size:16px}
   .title small{color:var(--muted);font-size:12px}
+  .title .offline{display:none;font-size:11px;font-weight:700;color:#b91c1c;background:#fee2e2;border-radius:999px;padding:2px 8px}
+  body.offline .title .offline{display:inline-block}
   .chips{display:flex;gap:6px;flex-wrap:wrap}
   .chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--line);border-radius:999px;
     padding:7px 12px;font-size:14px;font-weight:600;box-shadow:var(--shadow);cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
@@ -115,7 +119,7 @@
 <div id="map"></div>
 
 <div class="topbar">
-  <div class="title">🏍️ <b>Мото-карта Ташкента</b><small id="osmdate"></small></div>
+  <div class="title">🏍️ <b>Мото-карта Ташкента</b><small id="osmdate"></small><span class="offline" id="offline">офлайн</span></div>
   <div class="chips" id="chips">
     <button class="chip" data-layer="banned" style="--c:var(--red)"><span class="dot"></span>Запрет</button>
     <button class="chip" data-layer="corridors" style="--c:var(--green)"><span class="dot"></span>Коридоры</button>
@@ -149,6 +153,11 @@
   <div class="tools">
     <button class="btn" id="btnExport">Экспорт отметок</button>
     <button class="btn" id="btnImport">Импорт</button>
+  </div>
+  <p>Офлайн: страница и просмотренные участки карты сохраняются автоматически. Кнопка ниже дозагружает текущий район на 3 уровня приближения.</p>
+  <div class="tools">
+    <button class="btn" id="btnSaveArea">Сохранить район</button>
+    <button class="btn" id="btnClearTiles">Очистить (<span id="tileCount">…</span>)</button>
   </div>
 </div>
 
@@ -186,7 +195,7 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="vendor/leaflet.min.js"></script>
 <script>
 const DATA = /*__DATA__*/null;
 
@@ -194,7 +203,7 @@ const map = L.map('map', {zoomControl:true, preferCanvas:true, minZoom:10, maxZo
   .setView([41.311, 69.279], 12);
 map.zoomControl.setPosition('bottomleft');
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxZoom:19, className:'basemap'
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxZoom:19, className:'basemap', crossOrigin:'anonymous'
 }).addTo(map);
 document.getElementById('osmdate').textContent = 'OSM ' + DATA.osmDate;
 
@@ -555,6 +564,69 @@ map.on('click', e => {
   if (!routeMode) return;
   if (!rtA) setPoint('A', e.latlng); else if (!rtB) setPoint('B', e.latlng); else setPoint('B', e.latlng);
 });
+
+/* ---------- offline: service worker, tile prefetch, status ---------- */
+const APP_VERSION = '__VERSION__';
+function setOnline(){ document.body.classList.toggle('offline', !navigator.onLine); }
+window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); });
+window.addEventListener('offline', () => { setOnline(); toast('Нет связи: работаю офлайн'); });
+setOnline();
+
+let swReg = null;
+function swMessage(msg){
+  return new Promise(resolve => {
+    if (!navigator.serviceWorker || !navigator.serviceWorker.controller) { resolve(null); return; }
+    const handler = e => { if (e.data && e.data.re === msg.type) { navigator.serviceWorker.removeEventListener('message', handler); resolve(e.data); } };
+    navigator.serviceWorker.addEventListener('message', handler);
+    navigator.serviceWorker.controller.postMessage(msg);
+    setTimeout(() => { navigator.serviceWorker.removeEventListener('message', handler); resolve(null); }, 3000);
+  });
+}
+async function refreshTileCount(){
+  const r = await swMessage({type:'tiles-count'});
+  document.getElementById('tileCount').textContent = r ? r.count + ' тайлов' : '—';
+}
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    swReg = reg;
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      nw && nw.addEventListener('statechange', () => { if (nw.state === 'installed' && navigator.serviceWorker.controller) toast('Есть новая версия карты, обновите страницу'); });
+    });
+    if (navigator.serviceWorker.controller) refreshTileCount();
+  }).catch(() => {});
+  navigator.serviceWorker.addEventListener('controllerchange', refreshTileCount);
+}
+
+// tile prefetch for the current view, current zoom .. +2 (capped)
+function lon2x(lon, z){ return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
+function lat2y(lat, z){ const r = lat * Math.PI / 180; return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z)); }
+function tilesFor(bounds, z){
+  const out = [], x0 = lon2x(bounds.getWest(), z), x1 = lon2x(bounds.getEast(), z), y0 = lat2y(bounds.getNorth(), z), y1 = lat2y(bounds.getSouth(), z);
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) out.push('https://tile.openstreetmap.org/' + z + '/' + x + '/' + y + '.png');
+  return out;
+}
+let prefetching = false;
+document.getElementById('btnSaveArea').onclick = async () => {
+  if (prefetching) return;
+  if (!navigator.serviceWorker || !navigator.serviceWorker.controller) { toast('Офлайн-кэш ещё не готов, обновите страницу'); return; }
+  if (!navigator.onLine) { toast('Нет связи'); return; }
+  const b = map.getBounds(), z0 = Math.max(12, Math.min(map.getZoom(), 17));
+  let urls = [];
+  for (let z = z0; z <= Math.min(z0 + 2, 17); z++) { const t = tilesFor(b, z); if (urls.length + t.length > 900) break; urls = urls.concat(t); }
+  if (!urls.length) { toast('Приблизьте карту, район слишком большой'); return; }
+  prefetching = true; const btn = document.getElementById('btnSaveArea'); let done = 0, failed = 0;
+  const worker = async () => { while (urls.length) { const u = urls.shift(); try { const r = await fetch(u, {mode:'cors'}); if (!r.ok) failed++; } catch (e) { failed++; } done++; if (done % 25 === 0) btn.textContent = 'Сохраняю… ' + done; } };
+  const total = urls.length; btn.textContent = 'Сохраняю… 0/' + total;
+  await Promise.all([1, 2, 3, 4].map(worker));
+  prefetching = false; btn.textContent = 'Сохранить район';
+  toast('Сохранено тайлов: ' + (done - failed) + (failed ? ', ошибок: ' + failed : ''));
+  refreshTileCount();
+};
+document.getElementById('btnClearTiles').onclick = async () => {
+  if (!confirm('Удалить сохранённые участки карты?')) return;
+  await swMessage({type:'tiles-clear'}); refreshTileCount(); toast('Кэш карты очищен');
+};
 </script>
 </body>
 </html>

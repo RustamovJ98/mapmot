@@ -6,8 +6,10 @@ Layers produced (all GeoJSON, embedded into the page):
   hazards    - speed bumps, level crossings, speed cameras, bad surfaces
   pois       - petrol stations, tyre shops, motorcycle shops / parking
 """
+import hashlib
 import json
 import re
+import shutil
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -215,7 +217,13 @@ def main():
                       "hazards": len(hazards["features"]), "pois": len(pois["features"])}}
     js = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     out = tmpl.replace("/*__DATA__*/null", js)
+    # static assets (service worker, manifest, vendored Leaflet, icons)
+    static = ROOT / "build" / "static"
+    shutil.copytree(static, DIST, dirs_exist_ok=True)
+    version = hashlib.sha1((out + (static / "sw.js").read_text(encoding="utf-8")).encode("utf-8")).hexdigest()[:10]
+    out = out.replace("__VERSION__", version)
     (DIST / "index.html").write_text(out, encoding="utf-8")
+    (DIST / "sw.js").write_text((static / "sw.js").read_text(encoding="utf-8").replace("__VERSION__", version), encoding="utf-8")
     (DIST / ".nojekyll").write_text("", encoding="utf-8")
     print("banned %d | corridors %d %s | hazards %d | pois %d | OSM %s" % (
         len(banned["features"]), sum(counts.values()), counts, len(hazards["features"]), len(pois["features"]), osm_date))
