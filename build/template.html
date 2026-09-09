@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light only">
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Мото-карта Ташкента</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23e5322d'/%3E%3Ctext x='32' y='42' font-size='30' text-anchor='middle'%3E%F0%9F%8F%8D%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{
+    --bg:#ffffff; --fg:#1a1c1f; --muted:#6b7280; --line:#e5e7eb;
+    --red:#e11d48; --green:#16a34a; --orange:#f59e0b; --blue:#2563eb; --purple:#7c3aed;
+    --shadow:0 2px 10px rgba(0,0,0,.14);
+    --safe-top:env(safe-area-inset-top,0px); --safe-bottom:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);
+    font:15px/1.35 -apple-system,"Segoe UI",Roboto,system-ui,sans-serif;overscroll-behavior:none}
+  #map{position:fixed;inset:0;background:#f4f4f2}
+  .leaflet-container{font:inherit;background:#f4f4f2}
+  .basemap{filter:saturate(.55) contrast(.92) brightness(1.04)}
+
+  /* top bar */
+  .topbar{position:fixed;left:0;right:0;top:0;padding:calc(8px + var(--safe-top)) 8px 8px;z-index:1000;
+    pointer-events:none;display:flex;flex-direction:column;gap:8px}
+  .topbar>*{pointer-events:auto}
+  .title{display:flex;align-items:center;gap:8px;background:var(--bg);border-radius:12px;box-shadow:var(--shadow);
+    padding:8px 12px;width:max-content;max-width:100%}
+  .title b{font-size:16px}
+  .title small{color:var(--muted);font-size:12px}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--line);border-radius:999px;
+    padding:7px 12px;font-size:14px;font-weight:600;box-shadow:var(--shadow);cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
+  .chip .dot{width:10px;height:10px;border-radius:50%;background:var(--c)}
+  .chip.off{opacity:.55}
+  .chip.off .dot{background:#cbd5e1}
+
+  /* buttons */
+  .fabs{position:fixed;right:10px;bottom:calc(16px + var(--safe-bottom));z-index:1000;display:flex;flex-direction:column;gap:10px}
+  .fab{width:48px;height:48px;border-radius:50%;background:var(--bg);border:none;box-shadow:var(--shadow);display:grid;place-items:center;
+    cursor:pointer;font-size:20px;-webkit-tap-highlight-color:transparent}
+  .fab.active{background:var(--blue);color:#fff}
+  .fab:active{transform:scale(.95)}
+  .leaflet-control-zoom{display:none}
+  @media (min-width:900px){.leaflet-control-zoom{display:block}}
+  .leaflet-bottom.leaflet-left{margin-bottom:var(--safe-bottom)}
+  .leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.75)}
+
+  /* info sheet */
+  .sheet{position:fixed;left:8px;right:8px;bottom:calc(10px + var(--safe-bottom));z-index:1001;background:var(--bg);border-radius:14px;
+    box-shadow:0 -2px 16px rgba(0,0,0,.18);padding:12px 14px;max-width:440px;display:none}
+  .sheet.show{display:block}
+  .sheet h3{margin:0 0 2px;font-size:17px;display:flex;align-items:center;gap:8px}
+  .sheet h3 .dot{width:12px;height:12px;border-radius:50%;flex:none}
+  .sheet .sub{color:var(--muted);font-size:13px;margin-bottom:6px}
+  .sheet p{margin:6px 0}
+  .sheet .meta{font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+  .sheet .meta a{color:var(--blue);text-decoration:none}
+  .sheet .close{position:absolute;right:8px;top:8px;width:32px;height:32px;border-radius:50%;border:none;background:#f3f4f6;font-size:18px;cursor:pointer}
+
+  /* legend */
+  .legend{position:fixed;left:8px;bottom:calc(30px + var(--safe-bottom));z-index:1000;background:var(--bg);border-radius:12px;box-shadow:var(--shadow);
+    padding:10px 12px;font-size:13px;display:none;max-width:280px}
+  .legend.show{display:block}
+  .legend div{display:flex;align-items:center;gap:8px;margin:3px 0}
+  .legend .ln{width:22px;height:5px;border-radius:3px;flex:none}
+  .legend .pt{width:12px;height:12px;border-radius:50%;flex:none;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+  .legend p{margin:6px 0 0;color:var(--muted);font-size:12px}
+  .user-dot{width:16px;height:16px;border-radius:50%;background:var(--blue);border:3px solid #fff;box-shadow:0 0 0 2px rgba(37,99,235,.5),0 1px 6px rgba(0,0,0,.3)}
+  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(90px + var(--safe-bottom));z-index:1002;background:#111;color:#fff;
+    padding:8px 14px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
+  .toast.show{opacity:.92}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="topbar">
+  <div class="title">🏍️ <b>Мото-карта Ташкента</b><small id="osmdate"></small></div>
+  <div class="chips" id="chips">
+    <button class="chip" data-layer="banned" style="--c:var(--red)"><span class="dot"></span>Запрет</button>
+    <button class="chip" data-layer="corridors" style="--c:var(--green)"><span class="dot"></span>Коридоры</button>
+    <button class="chip" data-layer="hazards" style="--c:var(--orange)"><span class="dot"></span>Опасности</button>
+    <button class="chip" data-layer="pois" style="--c:var(--blue)"><span class="dot"></span>АЗС / сервис</button>
+  </div>
+</div>
+
+<div class="fabs">
+  <button class="fab" id="btnLegend" title="Легенда">❔</button>
+  <button class="fab" id="btnLocate" title="Моё местоположение">◎</button>
+</div>
+
+<div class="legend" id="legend">
+  <div><span class="ln" style="background:var(--red)"></span>Мотоциклам запрещено (OSM motorcycle=no)</div>
+  <div><span class="ln" style="background:var(--green)"></span>Удобные коридоры (неофициально)</div>
+  <div><span class="ln" style="background:var(--orange)"></span>Плохое покрытие</div>
+  <div><span class="pt" style="background:var(--orange)"></span>Лежачий полицейский</div>
+  <div><span class="pt" style="background:#78350f"></span>Ж/д переезд</div>
+  <div><span class="pt" style="background:var(--purple)"></span>Камера</div>
+  <div><span class="pt" style="background:var(--blue)"></span>АЗС с бензином</div>
+  <div><span class="pt" style="background:#93c5fd"></span>АЗС, топливо не указано</div>
+  <div><span class="pt" style="background:#0f766e"></span>Мотосервис / шиномонтаж / мотопарковка</div>
+  <p>Карта не заменяет дорожные знаки. Данные OpenStreetMap, проверяйте на месте. Точки опасностей видны от 14-го зума.</p>
+</div>
+
+<div class="sheet" id="sheet">
+  <button class="close" id="sheetClose">×</button>
+  <h3 id="shTitle"></h3>
+  <div class="sub" id="shSub"></div>
+  <p id="shBody"></p>
+  <div class="meta" id="shMeta"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const DATA = /*__DATA__*/null;
+
+const map = L.map('map', {zoomControl:true, tap:false, preferCanvas:true, minZoom:10, maxZoom:19})
+  .setView([41.311, 69.279], 12);
+map.zoomControl.setPosition('bottomleft');
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxZoom:19, className:'basemap'
+}).addTo(map);
+document.getElementById('osmdate').textContent = 'OSM ' + DATA.osmDate;
+
+const renderer = L.canvas({padding:0.5, tolerance:10});
+
+/* ---------- info sheet ---------- */
+const sheet = document.getElementById('sheet');
+function showSheet(color, title, sub, body, meta){
+  document.getElementById('shTitle').innerHTML = '<span class="dot" style="background:'+color+'"></span>' + esc(title);
+  document.getElementById('shSub').textContent = sub || '';
+  document.getElementById('shBody').textContent = body || '';
+  document.getElementById('shMeta').innerHTML = meta || '';
+  sheet.classList.add('show');
+}
+document.getElementById('sheetClose').onclick = () => sheet.classList.remove('show');
+map.on('click', () => sheet.classList.remove('show'));
+function esc(s){return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function osmLink(type, id){ return '<a href="https://www.openstreetmap.org/'+type+'/'+id+'" target="_blank" rel="noopener">OSM ↗</a>'; }
+function extra(p){
+  const bits = [];
+  if (p.lanes) bits.push('полос: ' + p.lanes);
+  if (p.maxspeed) bits.push(p.maxspeed + ' км/ч');
+  if (p.surface) bits.push('покрытие: ' + p.surface);
+  if (p.smoothness) bits.push('состояние: ' + p.smoothness);
+  return bits.map(b => '<span>'+esc(b)+'</span>').join('');
+}
+
+/* ---------- layers ---------- */
+const layers = {};
+
+layers.corridors = L.geoJSON(DATA.corridors, {
+  renderer, style:{color:'#16a34a', weight:5, opacity:0.75, lineCap:'round'},
+  onEachFeature:(f, l) => l.on('click', e => {
+    L.DomEvent.stopPropagation(e);
+    const p = f.properties;
+    showSheet('#16a34a', p.n, 'Удобный коридор · ' + p.h, p.note, extra(p) + osmLink('way', p.id));
+  })
+});
+
+layers.hazards = L.layerGroup();
+const hazardLines = L.geoJSON({type:'FeatureCollection', features:DATA.hazards.features.filter(f => f.geometry.type === 'LineString')}, {
+  renderer, style:{color:'#f59e0b', weight:5, opacity:0.85, dashArray:'6 6'},
+  onEachFeature:(f, l) => l.on('click', e => {
+    L.DomEvent.stopPropagation(e);
+    const p = f.properties;
+    showSheet('#f59e0b', p.n || p.label, p.h, p.label, osmLink('way', p.id));
+  })
+});
+const hazardColor = {bump:'#f59e0b', crossing:'#78350f', camera:'#7c3aed', hazard:'#dc2626'};
+const hazardPoints = L.geoJSON({type:'FeatureCollection', features:DATA.hazards.features.filter(f => f.geometry.type === 'Point')}, {
+  pointToLayer:(f, ll) => L.circleMarker(ll, {renderer, radius:6, color:'#fff', weight:2, fillColor:hazardColor[f.properties.kind] || '#f59e0b', fillOpacity:1}),
+  onEachFeature:(f, l) => l.on('click', e => {
+    L.DomEvent.stopPropagation(e);
+    const p = f.properties;
+    showSheet(hazardColor[p.kind], p.label, 'Опасность', '', osmLink('node', p.id));
+  })
+});
+hazardLines.addTo(layers.hazards);
+
+const poiColor = {petrol:'#2563eb', fuel_unknown:'#93c5fd', moto:'#0f766e', tyres:'#0f766e', parking:'#0f766e'};
+layers.pois = L.geoJSON(DATA.pois, {
+  pointToLayer:(f, ll) => L.circleMarker(ll, {renderer, radius:f.properties.kind === 'moto' ? 8 : 6, color:'#fff', weight:2, fillColor:poiColor[f.properties.kind], fillOpacity:1}),
+  onEachFeature:(f, l) => l.on('click', e => {
+    L.DomEvent.stopPropagation(e);
+    const p = f.properties;
+    const meta = [];
+    if (p.hours) meta.push('<span>'+esc(p.hours)+'</span>');
+    if (p.phone) meta.push('<a href="tel:'+esc(p.phone)+'">'+esc(p.phone)+'</a>');
+    const [lon, lat] = f.geometry.coordinates;
+    meta.push('<a href="https://www.google.com/maps/dir/?api=1&destination='+lat+','+lon+'" target="_blank" rel="noopener">Маршрут ↗</a>');
+    meta.push(osmLink(p.t, p.id));
+    showSheet(poiColor[p.kind], p.label, p.sub, '', meta.join(''));
+  })
+});
+
+layers.banned = L.geoJSON(DATA.banned, {
+  renderer, style:{color:'#e11d48', weight:6, opacity:0.9, lineCap:'round'},
+  onEachFeature:(f, l) => l.on('click', e => {
+    L.DomEvent.stopPropagation(e);
+    const p = f.properties;
+    showSheet('#e11d48', p.n, p.reason + ' · ' + p.h, 'В OpenStreetMap отмечено: ' + p.tag + '. Проверяйте знаки на въезде.', extra(p) + osmLink('way', p.id));
+  })
+});
+
+// zoom-dependent point layers (keep the map light when zoomed out)
+function syncPoints(){
+  const z = map.getZoom();
+  if (map.hasLayer(layers.hazards)) {
+    if (z >= 14) { if (!layers.hazards.hasLayer(hazardPoints)) layers.hazards.addLayer(hazardPoints); }
+    else if (layers.hazards.hasLayer(hazardPoints)) layers.hazards.removeLayer(hazardPoints);
+  }
+}
+map.on('zoomend', syncPoints);
+
+/* ---------- chips / persistence ---------- */
+const order = ['corridors', 'hazards', 'pois', 'banned']; // banned last => drawn on top
+let state = {banned:true, corridors:true, hazards:false, pois:false};
+try { Object.assign(state, JSON.parse(localStorage.getItem('mapmot.layers') || '{}')); } catch (e) {}
+function applyLayers(){
+  order.forEach(k => { if (state[k]) layers[k].addTo(map); else map.removeLayer(layers[k]); });
+  if (state.banned) layers.banned.bringToFront();
+  document.querySelectorAll('.chip').forEach(c => c.classList.toggle('off', !state[c.dataset.layer]));
+  syncPoints();
+  try { localStorage.setItem('mapmot.layers', JSON.stringify(state)); } catch (e) {}
+}
+document.getElementById('chips').addEventListener('click', e => {
+  const c = e.target.closest('.chip'); if (!c) return;
+  state[c.dataset.layer] = !state[c.dataset.layer]; applyLayers();
+});
+applyLayers();
+
+/* ---------- legend ---------- */
+document.getElementById('btnLegend').onclick = () => document.getElementById('legend').classList.toggle('show');
+
+/* ---------- geolocation ---------- */
+const btnLocate = document.getElementById('btnLocate');
+let watchId = null, userMarker = null, accCircle = null, follow = false, firstFix = true;
+function toast(msg){ const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2500); }
+function stopLocate(){
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  watchId = null; follow = false; firstFix = true; btnLocate.classList.remove('active');
+}
+btnLocate.onclick = () => {
+  if (!navigator.geolocation) { toast('Геолокация недоступна'); return; }
+  if (watchId !== null) {
+    if (follow) { stopLocate(); toast('Слежение выключено'); return; }
+    follow = true; btnLocate.classList.add('active'); if (userMarker) map.setView(userMarker.getLatLng(), Math.max(map.getZoom(), 15)); return;
+  }
+  btnLocate.classList.add('active'); follow = true; toast('Определяю местоположение…');
+  watchId = navigator.geolocation.watchPosition(pos => {
+    const ll = [pos.coords.latitude, pos.coords.longitude];
+    if (!userMarker) {
+      userMarker = L.marker(ll, {icon:L.divIcon({className:'', html:'<div class="user-dot"></div>', iconSize:[16,16], iconAnchor:[8,8]}), interactive:false}).addTo(map);
+      accCircle = L.circle(ll, {radius:pos.coords.accuracy, color:'#2563eb', weight:1, fillOpacity:0.08, interactive:false}).addTo(map);
+    } else { userMarker.setLatLng(ll); accCircle.setLatLng(ll).setRadius(pos.coords.accuracy); }
+    if (follow) { if (firstFix) { map.setView(ll, Math.max(map.getZoom(), 15)); firstFix = false; } else map.panTo(ll, {animate:true}); }
+  }, err => { stopLocate(); toast(err.code === 1 ? 'Доступ к геолокации запрещён' : 'Не удалось определить местоположение'); },
+  {enableHighAccuracy:true, maximumAge:3000, timeout:15000});
+};
+map.on('dragstart', () => { if (follow) { follow = false; btnLocate.classList.remove('active'); } });
+</script>
+</body>
+</html>
