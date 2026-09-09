@@ -72,9 +72,34 @@
   .legend .pt{width:12px;height:12px;border-radius:50%;flex:none;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.25)}
   .legend p{margin:6px 0 0;color:var(--muted);font-size:12px}
   .user-dot{width:16px;height:16px;border-radius:50%;background:var(--blue);border:3px solid #fff;box-shadow:0 0 0 2px rgba(37,99,235,.5),0 1px 6px rgba(0,0,0,.3)}
-  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(90px + var(--safe-bottom));z-index:1002;background:#111;color:#fff;
+  .toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(150px + var(--safe-top));z-index:1002;background:#111;color:#fff;
     padding:8px 14px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
   .toast.show{opacity:.92}
+
+  /* marks */
+  .mark{width:30px;height:30px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;
+    box-shadow:0 2px 6px rgba(0,0,0,.35);display:grid;place-items:center;background:var(--c)}
+  .mark span{transform:rotate(45deg);font-size:15px;line-height:1}
+  .mark.mine{border-style:dashed;border-color:#fff}
+  .form{display:none}
+  .form.show{display:block}
+  .types{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+  .type{border:2px solid var(--line);background:#fff;border-radius:10px;padding:6px 9px;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:5px}
+  .type.sel{border-color:var(--c);background:color-mix(in srgb,var(--c) 12%,#fff)}
+  .form textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:8px;font:inherit;resize:none;height:64px}
+  .row{display:flex;gap:8px;margin-top:8px}
+  .btn{flex:1;border:none;border-radius:10px;padding:10px;font:inherit;font-weight:600;cursor:pointer;background:#f3f4f6}
+  .btn.primary{background:var(--blue);color:#fff}
+  .btn.danger{background:#fee2e2;color:#b91c1c}
+  .sheet .actions{display:flex;gap:8px;margin-top:10px}
+  .sheet .actions .btn{padding:8px}
+  .crosshair{position:fixed;left:50%;top:50%;width:34px;height:34px;margin:-17px 0 0 -17px;z-index:999;pointer-events:none;display:none}
+  .crosshair.show{display:block}
+  .crosshair:before,.crosshair:after{content:"";position:absolute;background:var(--blue);left:50%;top:50%}
+  .crosshair:before{width:2px;height:34px;margin:-17px 0 0 -1px}
+  .crosshair:after{width:34px;height:2px;margin:-1px 0 0 -17px}
+  .legend .tools{display:flex;gap:6px;margin-top:8px}
+  .legend .tools .btn{font-size:12px;padding:7px}
 </style>
 </head>
 <body>
@@ -87,13 +112,16 @@
     <button class="chip" data-layer="corridors" style="--c:var(--green)"><span class="dot"></span>Коридоры</button>
     <button class="chip" data-layer="hazards" style="--c:var(--orange)"><span class="dot"></span>Опасности</button>
     <button class="chip" data-layer="pois" style="--c:var(--blue)"><span class="dot"></span>АЗС / сервис</button>
+    <button class="chip" data-layer="marks" style="--c:var(--purple)"><span class="dot"></span>Отметки</button>
   </div>
 </div>
 
 <div class="fabs">
   <button class="fab" id="btnLegend" title="Легенда">❔</button>
+  <button class="fab" id="btnAdd" title="Добавить отметку">＋</button>
   <button class="fab" id="btnLocate" title="Моё местоположение">◎</button>
 </div>
+<div class="crosshair" id="crosshair"></div>
 
 <div class="legend" id="legend">
   <div><span class="ln" style="background:var(--red)"></span>Мотоциклам запрещено (OSM motorcycle=no)</div>
@@ -105,7 +133,13 @@
   <div><span class="pt" style="background:var(--blue)"></span>АЗС с бензином</div>
   <div><span class="pt" style="background:#93c5fd"></span>АЗС, топливо не указано</div>
   <div><span class="pt" style="background:#0f766e"></span>Мотосервис / шиномонтаж / мотопарковка</div>
+  <div><span class="pt" style="background:var(--purple)"></span>Отметки: общие и ваши (пунктирная рамка)</div>
   <p>Карта не заменяет дорожные знаки. Данные OpenStreetMap, проверяйте на месте. Точки опасностей видны от 14-го зума.</p>
+  <p>Своя отметка: долгое нажатие на карту или кнопка «＋». Хранятся в этом браузере.</p>
+  <div class="tools">
+    <button class="btn" id="btnExport">Экспорт отметок</button>
+    <button class="btn" id="btnImport">Импорт</button>
+  </div>
 </div>
 
 <div class="sheet" id="sheet">
@@ -114,6 +148,18 @@
   <div class="sub" id="shSub"></div>
   <p id="shBody"></p>
   <div class="meta" id="shMeta"></div>
+  <div class="actions" id="shActions"></div>
+</div>
+
+<div class="sheet form" id="form">
+  <button class="close" id="formClose">×</button>
+  <h3 id="formTitle">Новая отметка</h3>
+  <div class="types" id="types"></div>
+  <textarea id="formText" placeholder="Комментарий: что здесь, когда видели…"></textarea>
+  <div class="row">
+    <button class="btn" id="formCancel">Отмена</button>
+    <button class="btn primary" id="formSave">Сохранить</button>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -121,7 +167,7 @@
 <script>
 const DATA = /*__DATA__*/null;
 
-const map = L.map('map', {zoomControl:true, tap:false, preferCanvas:true, minZoom:10, maxZoom:19})
+const map = L.map('map', {zoomControl:true, preferCanvas:true, minZoom:10, maxZoom:19})
   .setView([41.311, 69.279], 12);
 map.zoomControl.setPosition('bottomleft');
 L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -133,15 +179,18 @@ const renderer = L.canvas({padding:0.5, tolerance:10});
 
 /* ---------- info sheet ---------- */
 const sheet = document.getElementById('sheet');
-function showSheet(color, title, sub, body, meta){
+function showSheet(color, title, sub, body, meta, actions){
   document.getElementById('shTitle').innerHTML = '<span class="dot" style="background:'+color+'"></span>' + esc(title);
   document.getElementById('shSub').textContent = sub || '';
   document.getElementById('shBody').textContent = body || '';
   document.getElementById('shMeta').innerHTML = meta || '';
+  const act = document.getElementById('shActions'); act.innerHTML = '';
+  (actions || []).forEach(a => { const b = document.createElement('button'); b.className = 'btn ' + (a.cls || ''); b.textContent = a.label; b.onclick = a.fn; act.appendChild(b); });
+  document.getElementById('form').classList.remove('show');
   sheet.classList.add('show');
 }
 document.getElementById('sheetClose').onclick = () => sheet.classList.remove('show');
-map.on('click', () => sheet.classList.remove('show'));
+map.on('click', () => { sheet.classList.remove('show'); document.getElementById('form').classList.remove('show'); });
 function esc(s){return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function osmLink(type, id){ return '<a href="https://www.openstreetmap.org/'+type+'/'+id+'" target="_blank" rel="noopener">OSM ↗</a>'; }
 function extra(p){
@@ -220,12 +269,108 @@ function syncPoints(){
 }
 map.on('zoomend', syncPoints);
 
+/* ---------- marks: shared (from repo) + mine (localStorage) ---------- */
+const MARK_TYPES = {
+  sign:   {label:'Знак запрета', icon:'⛔', color:'#e11d48'},
+  danger: {label:'Опасное место', icon:'⚠️', color:'#f59e0b'},
+  police: {label:'Пост / патруль', icon:'👮', color:'#1d4ed8'},
+  good:   {label:'Хорошая дорога', icon:'👍', color:'#16a34a'},
+  fuel:   {label:'АЗС / сервис', icon:'⛽', color:'#0891b2'},
+  note:   {label:'Заметка', icon:'📝', color:'#6b7280'},
+};
+let myMarks = [];
+try { myMarks = JSON.parse(localStorage.getItem('mapmot.marks') || '[]'); } catch (e) {}
+function saveMarks(){ try { localStorage.setItem('mapmot.marks', JSON.stringify(myMarks)); } catch (e) { toast('Не удалось сохранить'); } }
+
+layers.marks = L.layerGroup();
+function markIcon(m, mine){
+  const t = MARK_TYPES[m.type] || MARK_TYPES.note;
+  return L.divIcon({className:'', html:'<div class="mark'+(mine ? ' mine' : '')+'" style="--c:'+t.color+'"><span>'+t.icon+'</span></div>',
+    iconSize:[30,30], iconAnchor:[15,30]});
+}
+function renderMarks(){
+  layers.marks.clearLayers();
+  (DATA.marks || []).forEach(m => L.marker([m.lat, m.lon], {icon:markIcon(m, false)}).on('click', e => { L.DomEvent.stopPropagation(e); openMark(m, false); }).addTo(layers.marks));
+  myMarks.forEach(m => L.marker([m.lat, m.lon], {icon:markIcon(m, true)}).on('click', e => { L.DomEvent.stopPropagation(e); openMark(m, true); }).addTo(layers.marks));
+}
+function openMark(m, mine){
+  const t = MARK_TYPES[m.type] || MARK_TYPES.note;
+  const meta = [];
+  if (m.date) meta.push('<span>'+esc(m.date)+'</span>');
+  if (m.url) meta.push('<a href="'+esc(m.url)+'" target="_blank" rel="noopener">Источник ↗</a>');
+  meta.push('<a href="https://www.google.com/maps/dir/?api=1&destination='+m.lat+','+m.lon+'" target="_blank" rel="noopener">Маршрут ↗</a>');
+  meta.push('<span>'+m.lat.toFixed(5)+', '+m.lon.toFixed(5)+'</span>');
+  const actions = mine ? [
+    {label:'Изменить', fn:() => openForm(m)},
+    {label:'Удалить', cls:'danger', fn:() => { if (confirm('Удалить отметку?')) { myMarks = myMarks.filter(x => x.id !== m.id); saveMarks(); renderMarks(); sheet.classList.remove('show'); toast('Удалено'); } }},
+  ] : [];
+  showSheet(t.color, t.icon + ' ' + t.label, mine ? 'Моя отметка' : 'Общая отметка', m.text, meta.join(''), actions);
+}
+
+// add / edit form
+const form = document.getElementById('form');
+let editing = null; // {id?, lat, lon}
+let selType = 'sign';
+const typesEl = document.getElementById('types');
+Object.entries(MARK_TYPES).forEach(([k, t]) => {
+  const b = document.createElement('button'); b.className = 'type'; b.dataset.type = k; b.style.setProperty('--c', t.color);
+  b.innerHTML = t.icon + ' ' + t.label; b.onclick = () => { selType = k; syncTypes(); }; typesEl.appendChild(b);
+});
+function syncTypes(){ typesEl.querySelectorAll('.type').forEach(b => b.classList.toggle('sel', b.dataset.type === selType)); }
+function openForm(m){
+  editing = m; selType = m.type || 'sign'; syncTypes();
+  document.getElementById('formTitle').textContent = m.id ? 'Изменить отметку' : 'Новая отметка';
+  document.getElementById('formText').value = m.text || '';
+  sheet.classList.remove('show'); stopAddMode(); form.classList.add('show');
+}
+function closeForm(){ form.classList.remove('show'); editing = null; }
+document.getElementById('formClose').onclick = closeForm;
+document.getElementById('formCancel').onclick = closeForm;
+document.getElementById('formSave').onclick = () => {
+  if (!editing) return;
+  const text = document.getElementById('formText').value.trim();
+  if (editing.id) { const m = myMarks.find(x => x.id === editing.id); if (m) { m.type = selType; m.text = text; } }
+  else myMarks.push({id:'m' + Date.now().toString(36), type:selType, lat:+editing.lat.toFixed(5), lon:+editing.lon.toFixed(5), text, date:new Date().toISOString().slice(0, 10)});
+  saveMarks(); renderMarks(); closeForm();
+  if (!state.marks) { state.marks = true; applyLayers(); }
+  toast('Отметка сохранена');
+};
+// long press (contextmenu) on map => new mark there
+map.on('contextmenu', e => { openForm({lat:e.latlng.lat, lon:e.latlng.lng}); });
+// "+" button: crosshair mode, tap again to confirm at map centre
+const btnAdd = document.getElementById('btnAdd'), crosshair = document.getElementById('crosshair');
+let addMode = false;
+function stopAddMode(){ addMode = false; btnAdd.classList.remove('active'); crosshair.classList.remove('show'); }
+btnAdd.onclick = () => {
+  if (addMode) { const c = map.getCenter(); openForm({lat:c.lat, lon:c.lng}); return; }
+  addMode = true; btnAdd.classList.add('active'); crosshair.classList.add('show');
+  sheet.classList.remove('show'); toast('Наведите прицел и нажмите ＋ ещё раз');
+};
+
+// export / import
+document.getElementById('btnExport').onclick = async () => {
+  if (!myMarks.length) { toast('Своих отметок пока нет'); return; }
+  const json = JSON.stringify(myMarks, null, 2);
+  try { if (navigator.share) { await navigator.share({title:'Мои отметки MapMot', text:json}); return; } } catch (e) { if (e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(json); toast('JSON скопирован в буфер'); } catch (e) { prompt('Скопируйте JSON:', json); }
+};
+document.getElementById('btnImport').onclick = () => {
+  const raw = prompt('Вставьте JSON с отметками:'); if (!raw) return;
+  try {
+    const arr = JSON.parse(raw); if (!Array.isArray(arr)) throw new Error();
+    let n = 0;
+    arr.forEach(m => { if (typeof m.lat === 'number' && typeof m.lon === 'number' && !myMarks.some(x => x.id === m.id)) { myMarks.push({id:m.id || 'm' + Math.random().toString(36).slice(2), type:m.type in MARK_TYPES ? m.type : 'note', lat:m.lat, lon:m.lon, text:m.text || '', date:m.date || ''}); n++; } });
+    saveMarks(); renderMarks(); toast('Добавлено отметок: ' + n);
+  } catch (e) { toast('Не удалось разобрать JSON'); }
+};
+renderMarks();
+
 /* ---------- chips / persistence ---------- */
-const order = ['corridors', 'hazards', 'pois', 'banned']; // banned last => drawn on top
-let state = {banned:true, corridors:true, hazards:false, pois:false};
+const order = ['corridors', 'hazards', 'pois', 'banned', 'marks']; // banned drawn on top of lines, marks are DOM markers
+let state = {banned:true, corridors:true, hazards:false, pois:false, marks:true};
 try { Object.assign(state, JSON.parse(localStorage.getItem('mapmot.layers') || '{}')); } catch (e) {}
 function applyLayers(){
-  order.forEach(k => { if (state[k]) layers[k].addTo(map); else map.removeLayer(layers[k]); });
+  order.forEach(k => { if (state[k]) { if (!map.hasLayer(layers[k])) layers[k].addTo(map); } else map.removeLayer(layers[k]); });
   if (state.banned) layers.banned.bringToFront();
   document.querySelectorAll('.chip').forEach(c => c.classList.toggle('off', !state[c.dataset.layer]));
   syncPoints();

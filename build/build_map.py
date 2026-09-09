@@ -207,7 +207,9 @@ def main():
     osm_date = json.loads((RAW / "banned.json").read_text(encoding="utf-8"))["osm3s"]["timestamp_osm_base"][:10]
 
     tmpl = (ROOT / "build" / "template.html").read_text(encoding="utf-8")
-    data = {"banned": banned, "corridors": corridors, "hazards": hazards, "pois": pois,
+    marks_path = ROOT / "data" / "marks.json"
+    marks = json.loads(marks_path.read_text(encoding="utf-8")) if marks_path.exists() else []
+    data = {"banned": banned, "corridors": corridors, "hazards": hazards, "pois": pois, "marks": marks,
             "osmDate": osm_date,
             "stats": {"banned": len(banned["features"]), "corridors": counts,
                       "hazards": len(hazards["features"]), "pois": len(pois["features"])}}
