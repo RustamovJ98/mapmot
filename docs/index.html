@@ -98,6 +98,15 @@
   .crosshair:before,.crosshair:after{content:"";position:absolute;background:var(--blue);left:50%;top:50%}
   .crosshair:before{width:2px;height:34px;margin:-17px 0 0 -1px}
   .crosshair:after{width:34px;height:2px;margin:-1px 0 0 -17px}
+  /* route */
+  .rp-row{display:flex;align-items:center;gap:8px;margin:6px 0}
+  .rp-dot{width:12px;height:12px;border-radius:50%;flex:none;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+  .rp-val{flex:1;font-size:14px}
+  .btn.small{flex:none;padding:6px 10px;font-size:13px}
+  .btn.hidden{display:none}
+  a.btn{text-align:center;text-decoration:none;color:inherit}
+  a.btn.primary{color:#fff}
+  .rt-pin{width:26px;height:26px;border-radius:50%;background:var(--c);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35);color:#fff;font-weight:700;font-size:13px;display:grid;place-items:center}
   .legend .tools{display:flex;gap:6px;margin-top:8px}
   .legend .tools .btn{font-size:12px;padding:7px}
 </style>
@@ -118,6 +127,7 @@
 
 <div class="fabs">
   <button class="fab" id="btnLegend" title="Легенда">❔</button>
+  <button class="fab" id="btnRoute" title="Маршрут">🧭</button>
   <button class="fab" id="btnAdd" title="Добавить отметку">＋</button>
   <button class="fab" id="btnLocate" title="Моё местоположение">◎</button>
 </div>
@@ -149,6 +159,19 @@
   <p id="shBody"></p>
   <div class="meta" id="shMeta"></div>
   <div class="actions" id="shActions"></div>
+</div>
+
+<div class="sheet form" id="routePanel">
+  <button class="close" id="routeClose">×</button>
+  <h3>🧭 Маршрут в обход запретов</h3>
+  <div class="rp-row"><span class="rp-dot" style="background:#16a34a"></span><span id="rpFrom" class="rp-val">Откуда: нажмите на карту</span><button class="btn small" id="rpMyLoc">◎ я здесь</button></div>
+  <div class="rp-row"><span class="rp-dot" style="background:#e11d48"></span><span id="rpTo" class="rp-val">Куда: нажмите на карту</span></div>
+  <div class="sub" id="rpStatus">Точки можно перетаскивать.</div>
+  <div class="row">
+    <button class="btn" id="rpClear">Очистить</button>
+    <a class="btn primary hidden" id="rpGoogle" target="_blank" rel="noopener">Google Maps</a>
+    <a class="btn primary hidden" id="rpYandex" target="_blank" rel="noopener">Яндекс</a>
+  </div>
 </div>
 
 <div class="sheet form" id="form">
@@ -411,6 +434,127 @@ btnLocate.onclick = () => {
   {enableHighAccuracy:true, maximumAge:3000, timeout:15000});
 };
 map.on('dragstart', () => { if (follow) { follow = false; btnLocate.classList.remove('active'); } });
+
+/* ---------- routing (Valhalla, motorcycle costing = respects motorcycle=no) ---------- */
+const VALHALLA = 'https://valhalla1.openstreetmap.de/route';
+const routePanel = document.getElementById('routePanel'), btnRoute = document.getElementById('btnRoute');
+const rp = {from:document.getElementById('rpFrom'), to:document.getElementById('rpTo'), status:document.getElementById('rpStatus'),
+            google:document.getElementById('rpGoogle'), yandex:document.getElementById('rpYandex')};
+let routeMode = false, rtA = null, rtB = null, rtLine = null, rtCasing = null, rtReq = 0;
+
+function pinIcon(label, color){ return L.divIcon({className:'', html:'<div class="rt-pin" style="--c:'+color+'">'+label+'</div>', iconSize:[26,26], iconAnchor:[13,13]}); }
+function setPoint(which, ll){
+  const color = which === 'A' ? '#16a34a' : '#e11d48';
+  let m = which === 'A' ? rtA : rtB;
+  if (!m) {
+    m = L.marker(ll, {icon:pinIcon(which, color), draggable:true, zIndexOffset:1000}).addTo(map);
+    m.on('dragend', buildRoute);
+    m.on('click', e => L.DomEvent.stopPropagation(e));
+    if (which === 'A') rtA = m; else rtB = m;
+  } else m.setLatLng(ll);
+  const txt = ll.lat.toFixed(4) + ', ' + ll.lng.toFixed(4);
+  (which === 'A' ? rp.from : rp.to).textContent = (which === 'A' ? 'Откуда: ' : 'Куда: ') + txt;
+  if (rtA && rtB) buildRoute(); else rp.status.textContent = which === 'A' ? 'Теперь нажмите на карту там, куда ехать.' : 'Нажмите на карту, откуда ехать.';
+}
+function decodeShape(str){ // Valhalla polyline6
+  let i = 0, lat = 0, lon = 0; const out = [];
+  while (i < str.length) {
+    let b, shift = 0, res = 0;
+    do { b = str.charCodeAt(i++) - 63; res |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += (res & 1) ? ~(res >> 1) : (res >> 1); shift = 0; res = 0;
+    do { b = str.charCodeAt(i++) - 63; res |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lon += (res & 1) ? ~(res >> 1) : (res >> 1);
+    out.push([lat / 1e6, lon / 1e6]);
+  }
+  return out;
+}
+function signPolygons(){ // ~50 m boxes around "sign" marks so the router avoids them
+  const d = 0.00025, polys = [];
+  [...(DATA.marks || []), ...myMarks].filter(m => m.type === 'sign').forEach(m => {
+    polys.push([[m.lon - d, m.lat - d], [m.lon + d, m.lat - d], [m.lon + d, m.lat + d], [m.lon - d, m.lat + d], [m.lon - d, m.lat - d]]);
+  });
+  return polys;
+}
+// distance (m) from point to banned lines, used to double-check the result
+const R = 6371000, cosLat = Math.cos(41.31 * Math.PI / 180);
+function toXY(lat, lon){ return [lon * Math.PI / 180 * R * cosLat, lat * Math.PI / 180 * R]; }
+const bannedSegs = [];
+DATA.banned.features.forEach(f => { const c = f.geometry.coordinates; for (let i = 1; i < c.length; i++) bannedSegs.push([toXY(c[i-1][1], c[i-1][0]), toXY(c[i][1], c[i][0]), f.properties.n]); });
+function nearBanned(pt){
+  const [px, py] = toXY(pt[0], pt[1]);
+  for (const [a, b, name] of bannedSegs) {
+    if (Math.abs(a[0] - px) > 60 && Math.abs(b[0] - px) > 60) continue;
+    const dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx*dx + dy*dy;
+    let t = len2 ? ((px - a[0]) * dx + (py - a[1]) * dy) / len2 : 0; t = Math.max(0, Math.min(1, t));
+    const ex = a[0] + t*dx - px, ey = a[1] + t*dy - py;
+    if (ex*ex + ey*ey < 12*12) return name;
+  }
+  return null;
+}
+async function buildRoute(){
+  if (!rtA || !rtB) return;
+  const a = rtA.getLatLng(), b = rtB.getLatLng(), my = ++rtReq;
+  rp.status.textContent = 'Строю маршрут…'; rp.google.classList.add('hidden'); rp.yandex.classList.add('hidden');
+  const body = {locations:[{lat:a.lat, lon:a.lng}, {lat:b.lat, lon:b.lng}], costing:'motorcycle', units:'kilometers', language:'ru-RU'};
+  const polys = signPolygons(); if (polys.length) body.exclude_polygons = polys;
+  try {
+    const res = await fetch(VALHALLA, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if (my !== rtReq) return;
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const trip = (await res.json()).trip;
+    const pts = decodeShape(trip.legs[0].shape);
+    if (rtLine) { map.removeLayer(rtLine); map.removeLayer(rtCasing); }
+    rtCasing = L.polyline(pts, {color:'#fff', weight:9, opacity:0.9, interactive:false}).addTo(map);
+    rtLine = L.polyline(pts, {color:'#2563eb', weight:5, opacity:0.95, interactive:false}).addTo(map);
+    if (state.banned) layers.banned.bringToFront();
+    map.fitBounds(rtLine.getBounds(), {paddingTopLeft:[30, 150], paddingBottomRight:[30, 220]});
+    // sanity check against red segments
+    // flag only when the route runs *along* a red segment (>60 m), not when it merely crosses one at a junction
+    const along = {}; let prev = null;
+    pts.forEach(p => {
+      const n = nearBanned(p);
+      if (n && prev && prev.n === n) { const [x1, y1] = toXY(prev.p[0], prev.p[1]), [x2, y2] = toXY(p[0], p[1]); along[n] = (along[n] || 0) + Math.hypot(x2 - x1, y2 - y1); }
+      prev = n ? {n, p} : null;
+    });
+    const crossed = new Set(Object.keys(along).filter(n => along[n] > 60));
+    const km = trip.summary.length.toFixed(1), min = Math.round(trip.summary.time / 60);
+    rp.status.textContent = km + ' км · ~' + min + ' мин' + (crossed.size ? ' · ⚠️ возможно, идёт по запрету: ' + [...crossed].join(', ') : ' · запреты обойдены');
+    // hand-off links with via points so external navigators follow the same path
+    const mans = trip.legs[0].maneuvers, via = [];
+    const step = Math.max(1, Math.ceil((mans.length - 2) / 8));
+    for (let i = 1; i < mans.length - 1; i += step) { const p = pts[mans[i].begin_shape_index]; if (p) via.push(p); }
+    const f = p => p[0].toFixed(5) + ',' + p[1].toFixed(5);
+    rp.google.href = 'https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=' + f([a.lat, a.lng]) + '&destination=' + f([b.lat, b.lng]) + (via.length ? '&waypoints=' + via.map(f).join('|') : '');
+    rp.yandex.href = 'https://yandex.ru/maps/?rtt=auto&rtext=' + [[a.lat, a.lng], ...via, [b.lat, b.lng]].map(f).join('~');
+    rp.google.classList.remove('hidden'); rp.yandex.classList.remove('hidden');
+  } catch (e) {
+    if (my !== rtReq) return;
+    rp.status.textContent = 'Не удалось построить маршрут (' + e.message + '). Проверьте интернет или сдвиньте точки ближе к дороге.';
+  }
+}
+function clearRoute(){
+  [rtA, rtB, rtLine, rtCasing].forEach(l => l && map.removeLayer(l)); rtA = rtB = rtLine = rtCasing = null; rtReq++;
+  rp.from.textContent = 'Откуда: нажмите на карту'; rp.to.textContent = 'Куда: нажмите на карту';
+  rp.status.textContent = 'Точки можно перетаскивать.'; rp.google.classList.add('hidden'); rp.yandex.classList.add('hidden');
+}
+function setRouteMode(on){
+  routeMode = on; btnRoute.classList.toggle('active', on); routePanel.classList.toggle('show', on);
+  if (on) { sheet.classList.remove('show'); form.classList.remove('show'); stopAddMode(); if (!rtA) toast('Нажмите на карту: откуда ехать'); }
+}
+btnRoute.onclick = () => setRouteMode(!routeMode);
+document.getElementById('routeClose').onclick = () => setRouteMode(false);
+document.getElementById('rpClear').onclick = clearRoute;
+document.getElementById('rpMyLoc').onclick = () => {
+  if (userMarker) { setPoint('A', userMarker.getLatLng()); return; }
+  if (!navigator.geolocation) { toast('Геолокация недоступна'); return; }
+  rp.status.textContent = 'Определяю местоположение…';
+  navigator.geolocation.getCurrentPosition(p => setPoint('A', L.latLng(p.coords.latitude, p.coords.longitude)),
+    () => { rp.status.textContent = 'Не удалось определить местоположение.'; }, {enableHighAccuracy:true, timeout:15000});
+};
+map.on('click', e => {
+  if (!routeMode) return;
+  if (!rtA) setPoint('A', e.latlng); else if (!rtB) setPoint('B', e.latlng); else setPoint('B', e.latlng);
+});
 </script>
 </body>
 </html>
