@@ -1,5 +1,5 @@
 /* MapMot service worker: offline app shell + on-demand tile cache. */
-const VERSION = 'b61929a2a1';
+const VERSION = '3166aafd63';
 const SHELL = 'mapmot-shell-' + VERSION;
 const TILES = 'mapmot-tiles-v1';
 const TILE_HOSTS = ['tile.openstreetmap.org', 'tiles.openfreemap.org'];

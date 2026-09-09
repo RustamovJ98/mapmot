@@ -117,9 +117,6 @@
     white-space:nowrap;border:1px solid #fda4af;transform:translate(-50%,-50%);width:max-content!important;pointer-events:none}
   .ban-entry{width:20px;height:20px;border-radius:50%;background:#fff;border:2px solid #e11d48;display:grid;place-items:center;font-size:11px;
     box-shadow:0 1px 4px rgba(0,0,0,.3)}
-  .alert{position:fixed;left:50%;transform:translateX(-50%);top:calc(150px + var(--safe-top));z-index:1001;background:#e11d48;color:#fff;
-    padding:10px 16px;border-radius:12px;font-weight:700;font-size:15px;box-shadow:var(--shadow);display:none;max-width:92vw;text-align:center}
-  .alert.show{display:block}
   .list{max-height:55vh;overflow:auto;margin:6px -6px 0}
   .list button{display:flex;align-items:center;gap:8px;width:100%;border:none;background:none;text-align:left;padding:8px 6px;font:inherit;cursor:pointer;border-radius:8px}
   .list button:active{background:#f3f4f6}
@@ -151,12 +148,10 @@
 </div>
 <div class="crosshair" id="crosshair"></div>
 
-<div class="alert" id="banAlert"></div>
-
 <div class="legend" id="legend">
   <div><span class="ln" style="background:var(--red)"></span>Запрет, отмечен по знакам или дорога закрыта</div>
   <div><span class="ln" style="background:repeating-linear-gradient(90deg,var(--red) 0 8px,transparent 8px 13px)"></span>Запрет, не подтверждён: массовая правка или старые данные</div>
-  <div><span class="pt" style="background:#fff;border-color:var(--red)"></span>Въезд в зону запрета (от 14-го зума)</div>
+  <div><span class="pt" style="background:#fff;border-color:var(--red)"></span>Въезд в зону запрета (от 15-го зума)</div>
   <div class="tools"><button class="btn" id="btnBanList">Список запретов</button></div>
   <div><span class="ln" style="background:var(--green)"></span>Удобные коридоры (неофициально)</div>
   <div><span class="ln" style="background:var(--orange)"></span>Плохое покрытие</div>
@@ -417,7 +412,7 @@ layers.banned = L.featureGroup([bannedLines]);
 function syncBanned(){
   const z = map.getZoom(), on = map.hasLayer(layers.banned);
   const want = (lyr, cond) => { if (on && cond) { if (!layers.banned.hasLayer(lyr)) layers.banned.addLayer(lyr); } else if (layers.banned.hasLayer(lyr)) layers.banned.removeLayer(lyr); };
-  want(banEntries, z >= 14); want(banLabels, z >= 15);
+  want(banEntries, z >= 15); want(banLabels, z >= 15);
 }
 map.on('zoomend', syncBanned);
 // list of banned streets
@@ -592,25 +587,10 @@ btnLocate.onclick = () => {
       accCircle = L.circle(ll, {radius:pos.coords.accuracy, color:'#2563eb', weight:1, fillOpacity:0.08, interactive:false}).addTo(map);
     } else { userMarker.setLatLng(ll); accCircle.setLatLng(ll).setRadius(pos.coords.accuracy); }
     if (follow) { if (firstFix) { map.setView(ll, Math.max(map.getZoom(), 15)); firstFix = false; } else map.panTo(ll, {animate:true}); }
-    checkBanProximity(ll);
   }, err => { stopLocate(); toast(err.code === 1 ? 'Доступ к геолокации запрещён' : 'Не удалось определить местоположение'); },
   {enableHighAccuracy:true, maximumAge:3000, timeout:15000});
 };
 map.on('dragstart', () => { if (follow) { follow = false; btnLocate.classList.remove('active'); } });
-// proximity warning while riding: banner within 200 m of a red segment, vibration once per street per 3 min
-const banAlert = document.getElementById('banAlert'), alertedAt = {};
-function checkBanProximity(ll){
-  if (!state.banned) { banAlert.classList.remove('show'); return; }
-  const near = nearestBanned([ll[0], ll[1]], 200);
-  if (!near) { banAlert.classList.remove('show'); return; }
-  banAlert.textContent = '⛔ ' + near.name + ' · ' + Math.round(near.dist) + ' м';
-  banAlert.classList.add('show');
-  const now = Date.now();
-  if (!alertedAt[near.name] || now - alertedAt[near.name] > 180000) {
-    alertedAt[near.name] = now;
-    if (navigator.vibrate) navigator.vibrate([250, 120, 250]);
-  }
-}
 
 /* ---------- routing (Valhalla, motorcycle costing = respects motorcycle=no) ---------- */
 const VALHALLA = 'https://valhalla1.openstreetmap.de/route';
