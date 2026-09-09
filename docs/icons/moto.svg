@@ -1,20 +1,32 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <rect width="512" height="512" rx="110" fill="#ffffff"/>
-  <g fill="none" stroke="#111111" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="120" cy="352" r="70"/>
-    <circle cx="392" cy="352" r="70"/>
-    <path d="M120 352 L212 268"/>
-    <path d="M392 352 L336 222"/>
-    <path d="M304 206 L270 168 L236 168"/>
+  <circle cx="256" cy="256" r="240" fill="#ffffff" stroke="#e5e7eb" stroke-width="4"/>
+  <circle cx="256" cy="256" r="216" fill="#ffffff" stroke="#d21f1f" stroke-width="46"/>
+  <g transform="translate(256 292) scale(0.6) translate(-256 -300)">
+    <!-- motorcycle -->
+    <g fill="none" stroke="#111111" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="120" cy="352" r="70"/>
+      <circle cx="392" cy="352" r="70"/>
+      <path d="M120 352 L212 268"/>
+      <path d="M392 352 L336 222"/>
+      <path d="M304 206 L270 168 L236 168"/>
+    </g>
+    <path d="M214 300 L322 322" fill="none" stroke="#111111" stroke-width="22" stroke-linecap="round"/>
+    <g fill="#111111">
+      <circle cx="120" cy="352" r="16"/>
+      <circle cx="392" cy="352" r="16"/>
+      <path d="M170 262 L206 200 L312 200 L340 186 L366 236 L346 272 L312 300 L212 300 Z"/>
+      <path d="M144 266 L192 266 L206 300 L146 300 Z"/>
+    </g>
+    <circle cx="352" cy="232" r="11" fill="#ffffff"/>
+    <!-- rider -->
+    <g fill="none" stroke="#111111" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M212 158 L172 246" stroke-width="40"/>
+      <path d="M206 176 L256 178" stroke-width="22"/>
+      <path d="M176 250 L246 264 L238 316" stroke-width="26"/>
+    </g>
+    <circle cx="226" cy="118" r="34" fill="#111111"/>
+    <path d="M238 104 a22 22 0 0 1 18 20 l-28 4z" fill="#ffffff" opacity="0.85"/>
   </g>
-  <g fill="none" stroke="#111111" stroke-width="22" stroke-linecap="round">
-    <path d="M214 300 L322 322"/>
-  </g>
-  <g fill="#111111">
-    <circle cx="120" cy="352" r="16"/>
-    <circle cx="392" cy="352" r="16"/>
-    <path d="M170 262 L206 200 L312 200 L340 186 L366 236 L346 272 L312 300 L212 300 Z"/>
-    <path d="M144 266 L192 266 L206 300 L146 300 Z"/>
-  </g>
-  <circle cx="352" cy="232" r="11" fill="#ffffff"/>
+  <path d="M104 104 L408 408" stroke="#d21f1f" stroke-width="46" stroke-linecap="butt"/>
 </svg>
