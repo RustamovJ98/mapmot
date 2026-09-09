@@ -13,6 +13,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/leaflet.min.css">
+<link rel="stylesheet" href="vendor/maplibre-gl.css">
 <style>
   :root{
     --bg:#ffffff; --fg:#1a1c1f; --muted:#6b7280; --line:#e5e7eb;
@@ -155,7 +156,10 @@
     <button class="btn" id="btnExport">Экспорт отметок</button>
     <button class="btn" id="btnImport">Импорт</button>
   </div>
-  <p>Офлайн: страница и просмотренные участки карты сохраняются автоматически. Кнопка ниже дозагружает текущий район на 3 уровня приближения.</p>
+  <div class="tools">
+    <button class="btn" id="btnBasemap">Подложка</button>
+  </div>
+  <p>Векторная подложка чёткая на любом зуме, растровая проще для слабых телефонов. Офлайн: страница и просмотренные участки карты сохраняются автоматически. Кнопка ниже дозагружает текущий район: для векторной подложки это сразу все уровни приближения.</p>
   <div class="tools">
     <button class="btn" id="btnSaveArea">Сохранить район</button>
     <button class="btn" id="btnClearTiles">Очистить (<span id="tileCount">…</span>)</button>
@@ -197,15 +201,37 @@
 <div class="toast" id="toast"></div>
 
 <script src="vendor/leaflet.min.js"></script>
+<script src="vendor/maplibre-gl.js"></script>
+<script src="vendor/leaflet-maplibre-gl.js"></script>
 <script>
 const DATA = /*__DATA__*/null;
 
 const map = L.map('map', {zoomControl:true, preferCanvas:true, minZoom:10, maxZoom:19})
   .setView([41.311, 69.279], 12);
 map.zoomControl.setPosition('bottomleft');
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxZoom:19, className:'basemap', crossOrigin:'anonymous'
-}).addTo(map);
+/* basemap: crisp vector tiles (OpenFreeMap via MapLibre) when WebGL works, raster OSM otherwise */
+const VECTOR_STYLE = 'style/liberty-ru.json'; // OpenFreeMap Liberty with Russian labels, built by build_map.py
+const VECTOR_TILEJSON = 'https://tiles.openfreemap.org/planet';
+function webglOk(){ try { const c = document.createElement('canvas'); return !!(window.WebGLRenderingContext && (c.getContext('webgl') || c.getContext('experimental-webgl'))); } catch (e) { return false; } }
+const canVector = !!(window.maplibregl && L.maplibreGL && webglOk());
+let basemapMode = 'vector';
+try { basemapMode = localStorage.getItem('mapmot.basemap') || 'vector'; } catch (e) {}
+if (!canVector) basemapMode = 'raster';
+let basemap = null;
+function setBasemap(mode){
+  if (basemap) map.removeLayer(basemap);
+  if (mode === 'vector' && canVector) {
+    basemap = L.maplibreGL({style:VECTOR_STYLE, attribution:'<a href="https://openfreemap.org">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/">OpenMapTiles</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'});
+  } else {
+    mode = 'raster';
+    basemap = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>', maxZoom:19, className:'basemap', crossOrigin:'anonymous'});
+  }
+  basemap.addTo(map); basemapMode = mode;
+  try { localStorage.setItem('mapmot.basemap', mode); } catch (e) {}
+  const b = document.getElementById('btnBasemap'); if (b) b.textContent = mode === 'vector' ? 'Подложка: векторная' : 'Подложка: растровая';
+}
+setBasemap(basemapMode);
 document.getElementById('osmdate').textContent = 'OSM ' + DATA.osmDate;
 
 const renderer = L.canvas({padding:0.5, tolerance:14});
@@ -444,6 +470,11 @@ applyLayers();
 
 /* ---------- legend ---------- */
 document.getElementById('btnLegend').onclick = () => document.getElementById('legend').classList.toggle('show');
+document.getElementById('btnBasemap').onclick = () => {
+  if (!canVector) { toast('Векторная подложка недоступна на этом устройстве'); return; }
+  setBasemap(basemapMode === 'vector' ? 'raster' : 'vector');
+};
+document.getElementById('btnBasemap').textContent = basemapMode === 'vector' ? 'Подложка: векторная' : 'Подложка: растровая';
 
 /* ---------- geolocation ---------- */
 const btnLocate = document.getElementById('btnLocate');
@@ -646,9 +677,23 @@ document.getElementById('btnSaveArea').onclick = async () => {
   if (prefetching) return;
   if (!navigator.serviceWorker || !navigator.serviceWorker.controller) { toast('Офлайн-кэш ещё не готов, обновите страницу'); return; }
   if (!navigator.onLine) { toast('Нет связи'); return; }
-  const b = map.getBounds(), z0 = Math.max(12, Math.min(map.getZoom(), 17));
+  const b = map.getBounds();
   let urls = [];
-  for (let z = z0; z <= Math.min(z0 + 2, 17); z++) { const t = tilesFor(b, z); if (urls.length + t.length > 900) break; urls = urls.concat(t); }
+  if (basemapMode === 'vector') {
+    // vector tiles end at z14 and overzoom above it: caching z(10..14) for the view covers every zoom level
+    let tmpl = null;
+    try { const tj = await (await fetch(VECTOR_TILEJSON)).json(); tmpl = tj.tiles && tj.tiles[0]; } catch (e) {}
+    if (!tmpl) { toast('Не удалось получить адрес векторных тайлов'); return; }
+    const zTop = Math.min(14, Math.max(map.getZoom(), 10));
+    for (let z = zTop; z >= 10; z--) {
+      const t = tilesFor(b, z).map(u => u.replace(/^https:\/\/tile\.openstreetmap\.org\/(\d+)\/(\d+)\/(\d+)\.png$/, (m, zz, x, y) => tmpl.replace('{z}', zz).replace('{x}', x).replace('{y}', y)));
+      if (urls.length + t.length > 400) break;
+      urls = urls.concat(t);
+    }
+  } else {
+    const z0 = Math.max(12, Math.min(map.getZoom(), 17));
+    for (let z = z0; z <= Math.min(z0 + 2, 17); z++) { const t = tilesFor(b, z); if (urls.length + t.length > 900) break; urls = urls.concat(t); }
+  }
   if (!urls.length) { toast('Приблизьте карту, район слишком большой'); return; }
   prefetching = true; const btn = document.getElementById('btnSaveArea'); let done = 0, failed = 0;
   const worker = async () => { while (urls.length) { const u = urls.shift(); try { const r = await fetch(u, {mode:'cors'}); if (!r.ok) failed++; } catch (e) { failed++; } done++; if (done % 25 === 0) btn.textContent = 'Сохраняю… ' + done; } };

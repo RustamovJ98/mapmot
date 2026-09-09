@@ -2,9 +2,10 @@
 const VERSION = '__VERSION__';
 const SHELL = 'mapmot-shell-' + VERSION;
 const TILES = 'mapmot-tiles-v1';
-const TILE_HOST = 'tile.openstreetmap.org';
+const TILE_HOSTS = ['tile.openstreetmap.org', 'tiles.openfreemap.org'];
 const MAX_TILES = 6000;
 const SHELL_URLS = ['./', './index.html', './vendor/leaflet.min.js', './vendor/leaflet.min.css',
+  './vendor/maplibre-gl.js', './vendor/maplibre-gl.css', './vendor/leaflet-maplibre-gl.js', './style/liberty-ru.json',
   './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-512-maskable.png'];
 
 self.addEventListener('install', e => {
@@ -20,7 +21,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
-  if (url.hostname === TILE_HOST) { e.respondWith(tileHandler(e.request)); return; }
+  if (TILE_HOSTS.includes(url.hostname)) { e.respondWith(tileHandler(e.request)); return; }
   if (url.origin === self.location.origin) { e.respondWith(shellHandler(e.request, url)); }
 });
 

@@ -293,7 +293,40 @@ def build_pois():
     return fc(feats)
 
 
+# ------------------------------------------------------------ basemap style
+STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
+
+
+def build_style():
+    """Local copy of the OpenFreeMap Liberty style with Russian labels first (name:ru -> latin -> name)."""
+    import urllib.request
+    cache = RAW / "style_liberty.json"
+    try:
+        req = urllib.request.Request(STYLE_URL, headers={"User-Agent": "MapMot/1.0"})
+        data = urllib.request.urlopen(req, timeout=60).read().decode("utf-8")
+        json.loads(data)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(data, encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        print("  style download failed, using cache:", e)
+    if not cache.exists():
+        return False
+    style = json.loads(cache.read_text(encoding="utf-8"))
+    patched = 0
+    for layer in style.get("layers", []):
+        tf = layer.get("layout", {}).get("text-field")
+        if tf is None or "name" not in json.dumps(tf):
+            continue
+        layer["layout"]["text-field"] = ["coalesce", ["get", "name:ru"], ["get", "name:latin"], ["get", "name"]]
+        patched += 1
+    (DIST / "style").mkdir(exist_ok=True)
+    (DIST / "style" / "liberty-ru.json").write_text(json.dumps(style, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print("  style: %d label layers switched to name:ru" % patched)
+    return True
+
+
 def main():
+    build_style()
     banned = build_banned()
     banned_ids = {f["properties"]["id"] for f in banned["features"]}
     corridors, counts = build_corridors(banned_ids)
