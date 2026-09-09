@@ -166,7 +166,7 @@
   <div><span class="ln" style="background:var(--orange)"></span>Плохое покрытие</div>
   <div id="legendPts"></div>
   <div><span class="pt" style="background:#db2777"></span>Отметки: общие и ваши (пунктирная рамка)</div>
-  <p>Карта не заменяет дорожные знаки. Данные OpenStreetMap, проверяйте на месте. В карточке запрета показано, кто и когда его отметил: по знакам, массовой правкой или давно. Точки опасностей видны от 14-го зума.</p>
+  <p>Карта не заменяет дорожные знаки. Данные OpenStreetMap, проверяйте на месте. В карточке запрета показано, кто и когда его отметил: по знакам, массовой правкой или давно. Радары и АЗС видны от 13-го зума, опасности от 14-го.</p>
   <p>Своя отметка: долгое нажатие на карту или кнопка «＋». Хранятся в этом браузере.</p>
   <div class="tools">
     <button class="btn" id="btnExport">Экспорт отметок</button>
@@ -466,12 +466,21 @@ document.getElementById('btnBanList').onclick = () => { document.getElementById(
 document.getElementById('listClose').onclick = () => listPanel.classList.remove('show');
 
 // zoom-dependent point layers (keep the map light when zoomed out)
+const pointsMinZoom = {hazards:14, radars:13, pois:13};
 function syncPoints(){
   const z = map.getZoom();
   if (map.hasLayer(layers.hazards)) {
-    if (z >= 14) { if (!layers.hazards.hasLayer(hazardPoints)) layers.hazards.addLayer(hazardPoints); }
+    if (z >= pointsMinZoom.hazards) { if (!layers.hazards.hasLayer(hazardPoints)) layers.hazards.addLayer(hazardPoints); }
     else if (layers.hazards.hasLayer(hazardPoints)) layers.hazards.removeLayer(hazardPoints);
   }
+  // radars and POIs are DOM pins: hide them when zoomed out to keep the map readable and fast
+  ['radars', 'pois'].forEach(k => {
+    if (!state[k]) return;
+    const show = z >= pointsMinZoom[k];
+    if (show && !map.hasLayer(layers[k])) layers[k].addTo(map);
+    if (!show && map.hasLayer(layers[k])) map.removeLayer(layers[k]);
+  });
+  if (state.banned) bannedLines.bringToFront();
 }
 map.on('zoomend', syncPoints);
 
