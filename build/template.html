@@ -112,6 +112,18 @@
   a.btn{text-align:center;text-decoration:none;color:inherit}
   a.btn.primary{color:#fff}
   .rt-pin{width:26px;height:26px;border-radius:50%;background:var(--c);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35);color:#fff;font-weight:700;font-size:13px;display:grid;place-items:center}
+  /* banned street extras */
+  .ban-label{background:rgba(255,255,255,.85);color:#9f1239;font-size:11px;font-weight:700;padding:1px 5px;border-radius:6px;
+    white-space:nowrap;border:1px solid #fda4af;transform:translate(-50%,-50%);width:max-content!important;pointer-events:none}
+  .ban-entry{width:20px;height:20px;border-radius:50%;background:#fff;border:2px solid #e11d48;display:grid;place-items:center;font-size:11px;
+    box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .alert{position:fixed;left:50%;transform:translateX(-50%);top:calc(150px + var(--safe-top));z-index:1001;background:#e11d48;color:#fff;
+    padding:10px 16px;border-radius:12px;font-weight:700;font-size:15px;box-shadow:var(--shadow);display:none;max-width:92vw;text-align:center}
+  .alert.show{display:block}
+  .list{max-height:55vh;overflow:auto;margin:6px -6px 0}
+  .list button{display:flex;align-items:center;gap:8px;width:100%;border:none;background:none;text-align:left;padding:8px 6px;font:inherit;cursor:pointer;border-radius:8px}
+  .list button:active{background:#f3f4f6}
+  .list .cnt{margin-left:auto;color:var(--muted);font-size:12px}
   .legend .tools{display:flex;gap:6px;margin-top:8px}
   .legend .tools .btn{font-size:12px;padding:7px}
 </style>
@@ -139,8 +151,13 @@
 </div>
 <div class="crosshair" id="crosshair"></div>
 
+<div class="alert" id="banAlert"></div>
+
 <div class="legend" id="legend">
-  <div><span class="ln" style="background:var(--red)"></span>Мотоциклам запрещено (OSM motorcycle=no)</div>
+  <div><span class="ln" style="background:var(--red)"></span>Запрет, отмечен по знакам или дорога закрыта</div>
+  <div><span class="ln" style="background:repeating-linear-gradient(90deg,var(--red) 0 8px,transparent 8px 13px)"></span>Запрет, не подтверждён: массовая правка или старые данные</div>
+  <div><span class="pt" style="background:#fff;border-color:var(--red)"></span>Въезд в зону запрета (от 14-го зума)</div>
+  <div class="tools"><button class="btn" id="btnBanList">Список запретов</button></div>
   <div><span class="ln" style="background:var(--green)"></span>Удобные коридоры (неофициально)</div>
   <div><span class="ln" style="background:var(--orange)"></span>Плохое покрытие</div>
   <div><span class="pt" style="background:var(--orange)"></span>Лежачий полицейский</div>
@@ -173,6 +190,13 @@
   <p id="shBody"></p>
   <div class="meta" id="shMeta"></div>
   <div class="actions" id="shActions"></div>
+</div>
+
+<div class="sheet form" id="listPanel">
+  <button class="close" id="listClose">×</button>
+  <h3>⛔ Запретные улицы</h3>
+  <div class="sub">Нажмите, чтобы показать улицу на карте. ✅ по знакам, ⚠️ массовая правка, ⏳ старые данные, 🚫 закрыта для всех</div>
+  <div class="list" id="banList"></div>
 </div>
 
 <div class="sheet form" id="routePanel">
@@ -248,8 +272,8 @@ function showSheet(color, title, sub, body, meta, actions){
   document.getElementById('form').classList.remove('show');
   sheet.classList.add('show');
 }
-document.getElementById('sheetClose').onclick = () => sheet.classList.remove('show');
-map.on('click', () => { sheet.classList.remove('show'); document.getElementById('form').classList.remove('show'); });
+document.getElementById('sheetClose').onclick = () => { sheet.classList.remove('show'); clearHighlight(); };
+map.on('click', () => { sheet.classList.remove('show'); document.getElementById('form').classList.remove('show'); clearHighlight(); });
 function esc(s){return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 function osmLink(type, id){ return '<a href="https://www.openstreetmap.org/'+type+'/'+id+'" target="_blank" rel="noopener">OSM ↗</a>'; }
 function extra(p){
@@ -333,17 +357,87 @@ layers.pois = L.geoJSON(DATA.pois, {
   })
 });
 
-layers.banned = L.geoJSON(DATA.banned, {
-  renderer, style:{color:'#e11d48', weight:6, opacity:0.9, lineCap:'round'},
+/* ---------- banned streets: confidence styling, highlight, entries, labels, list ---------- */
+const CONF_ICON = {sign:'✅', bulk:'⚠️', old:'⏳', closed:'🚫', osm:'ℹ️', unknown:'❔'};
+function banStyle(f){
+  const c = f.properties.conf;
+  if (c === 'sign' || c === 'closed') return {color:'#e11d48', weight:6, opacity:0.92, lineCap:'round'};
+  if (c === 'bulk') return {color:'#e11d48', weight:5, opacity:0.85, dashArray:'10 7', lineCap:'butt'};
+  if (c === 'old') return {color:'#e11d48', weight:5, opacity:0.8, dashArray:'4 8', lineCap:'butt'};
+  return {color:'#e11d48', weight:5, opacity:0.85, lineCap:'round'};
+}
+const banHighlight = L.layerGroup();
+function highlightStreet(name){
+  banHighlight.clearLayers();
+  DATA.banned.features.filter(f => f.properties.n === name).forEach(f =>
+    L.polyline(f.geometry.coordinates.map(c => [c[1], c[0]]), {renderer, color:'#fde047', weight:16, opacity:0.75, interactive:false}).addTo(banHighlight));
+  if (!map.hasLayer(banHighlight)) banHighlight.addTo(map);
+  bannedLines.bringToFront();
+}
+function clearHighlight(){ banHighlight.clearLayers(); }
+function openBanned(p){
+  highlightStreet(p.n);
+  const conf = CONF_ICON[p.conf] || 'ℹ️';
+  const segs = DATA.banned.features.filter(f => f.properties.n === p.n).length;
+  showSheet('#e11d48', p.n, p.reason + ' · ' + p.h + ' · сегментов: ' + segs,
+    conf + ' ' + p.src + '.\nВ OSM: ' + p.tag + (p.comment ? '\nКомментарий правки: «' + p.comment + '»' : ''),
+    extra(p) + osmLink('way', p.id), [
+      {label:'Показать всю улицу', fn:() => { const b = L.latLngBounds([]); DATA.banned.features.filter(f => f.properties.n === p.n).forEach(f => f.geometry.coordinates.forEach(c => b.extend([c[1], c[0]]))); map.fitBounds(b, {padding:[40, 40]}); }},
+    ]);
+}
+const bannedLines = L.geoJSON(DATA.banned, {
+  renderer, style:banStyle,
+  onEachFeature:(f, l) => l.on('click', e => { L.DomEvent.stopPropagation(e); openBanned(f.properties); })
+});
+// entry points into a banned zone (zoom >= 14)
+const banEntries = L.geoJSON(DATA.entries, {
+  pointToLayer:(f, ll) => L.marker(ll, {icon:L.divIcon({className:'', html:'<div class="ban-entry">⛔</div>', iconSize:[20, 20], iconAnchor:[10, 10]}), zIndexOffset:500}),
   onEachFeature:(f, l) => l.on('click', e => {
     L.DomEvent.stopPropagation(e);
-    const p = f.properties;
-    const confIcon = {sign:'✅', bulk:'⚠️', old:'⏳', closed:'🚫', osm:'ℹ️', unknown:'❔'}[p.conf] || 'ℹ️';
-    showSheet('#e11d48', p.n, p.reason + ' · ' + p.h,
-      confIcon + ' ' + p.src + '.\nВ OSM: ' + p.tag + (p.comment ? '\nКомментарий правки: «' + p.comment + '»' : ''),
-      extra(p) + osmLink('way', p.id));
+    const w = DATA.banned.features.find(x => x.properties.id === f.properties.way);
+    if (w) openBanned(w.properties);
   })
 });
+// one name label per street on its longest segment (zoom >= 15)
+const banLabels = L.layerGroup();
+(() => {
+  const best = {};
+  DATA.banned.features.forEach(f => {
+    const c = f.geometry.coordinates; let len = 0;
+    for (let i = 1; i < c.length; i++) len += Math.hypot((c[i][0] - c[i-1][0]) * 0.75, c[i][1] - c[i-1][1]);
+    if (!best[f.properties.n] || len > best[f.properties.n].len) best[f.properties.n] = {len, c};
+  });
+  Object.entries(best).forEach(([name, {c}]) => {
+    if (name === 'Без названия') return;
+    const m = c[Math.floor(c.length / 2)];
+    L.marker([m[1], m[0]], {icon:L.divIcon({className:'ban-label', html:'⛔ ' + esc(name), iconSize:null}), interactive:false}).addTo(banLabels);
+  });
+})();
+layers.banned = L.featureGroup([bannedLines]);
+function syncBanned(){
+  const z = map.getZoom(), on = map.hasLayer(layers.banned);
+  const want = (lyr, cond) => { if (on && cond) { if (!layers.banned.hasLayer(lyr)) layers.banned.addLayer(lyr); } else if (layers.banned.hasLayer(lyr)) layers.banned.removeLayer(lyr); };
+  want(banEntries, z >= 14); want(banLabels, z >= 15);
+}
+map.on('zoomend', syncBanned);
+// list of banned streets
+const listPanel = document.getElementById('listPanel');
+(() => {
+  const groups = {};
+  DATA.banned.features.forEach(f => { const p = f.properties; (groups[p.n] = groups[p.n] || {n:0, conf:{}, first:p}).n++; groups[p.n].conf[p.conf] = (groups[p.n].conf[p.conf] || 0) + 1; });
+  const order = ['sign', 'closed', 'osm', 'bulk', 'old', 'unknown'];
+  const rows = Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0], 'ru'));
+  const el = document.getElementById('banList');
+  rows.forEach(([name, g]) => {
+    const mainConf = order.find(k => g.conf[k]) || 'unknown';
+    const b = document.createElement('button');
+    b.innerHTML = '<span>' + CONF_ICON[mainConf] + '</span><span>' + esc(name) + '</span><span class="cnt">' + g.n + '</span>';
+    b.onclick = () => { listPanel.classList.remove('show'); if (!state.banned) { state.banned = true; applyLayers(); } openBanned(g.first); document.querySelector('#shActions button').click(); };
+    el.appendChild(b);
+  });
+})();
+document.getElementById('btnBanList').onclick = () => { document.getElementById('legend').classList.remove('show'); sheet.classList.remove('show'); listPanel.classList.add('show'); };
+document.getElementById('listClose').onclick = () => listPanel.classList.remove('show');
 
 // zoom-dependent point layers (keep the map light when zoomed out)
 function syncPoints(){
@@ -457,9 +551,9 @@ let state = {banned:true, corridors:true, hazards:false, radars:false, pois:fals
 try { Object.assign(state, JSON.parse(localStorage.getItem('mapmot.layers') || '{}')); } catch (e) {}
 function applyLayers(){
   order.forEach(k => { if (state[k]) { if (!map.hasLayer(layers[k])) layers[k].addTo(map); } else map.removeLayer(layers[k]); });
-  if (state.banned) layers.banned.bringToFront();
+  if (state.banned) bannedLines.bringToFront();
   document.querySelectorAll('.chip').forEach(c => c.classList.toggle('off', !state[c.dataset.layer]));
-  syncPoints();
+  syncPoints(); syncBanned();
   try { localStorage.setItem('mapmot.layers', JSON.stringify(state)); } catch (e) {}
 }
 document.getElementById('chips').addEventListener('click', e => {
@@ -498,10 +592,25 @@ btnLocate.onclick = () => {
       accCircle = L.circle(ll, {radius:pos.coords.accuracy, color:'#2563eb', weight:1, fillOpacity:0.08, interactive:false}).addTo(map);
     } else { userMarker.setLatLng(ll); accCircle.setLatLng(ll).setRadius(pos.coords.accuracy); }
     if (follow) { if (firstFix) { map.setView(ll, Math.max(map.getZoom(), 15)); firstFix = false; } else map.panTo(ll, {animate:true}); }
+    checkBanProximity(ll);
   }, err => { stopLocate(); toast(err.code === 1 ? 'Доступ к геолокации запрещён' : 'Не удалось определить местоположение'); },
   {enableHighAccuracy:true, maximumAge:3000, timeout:15000});
 };
 map.on('dragstart', () => { if (follow) { follow = false; btnLocate.classList.remove('active'); } });
+// proximity warning while riding: banner within 200 m of a red segment, vibration once per street per 3 min
+const banAlert = document.getElementById('banAlert'), alertedAt = {};
+function checkBanProximity(ll){
+  if (!state.banned) { banAlert.classList.remove('show'); return; }
+  const near = nearestBanned([ll[0], ll[1]], 200);
+  if (!near) { banAlert.classList.remove('show'); return; }
+  banAlert.textContent = '⛔ ' + near.name + ' · ' + Math.round(near.dist) + ' м';
+  banAlert.classList.add('show');
+  const now = Date.now();
+  if (!alertedAt[near.name] || now - alertedAt[near.name] > 180000) {
+    alertedAt[near.name] = now;
+    if (navigator.vibrate) navigator.vibrate([250, 120, 250]);
+  }
+}
 
 /* ---------- routing (Valhalla, motorcycle costing = respects motorcycle=no) ---------- */
 const VALHALLA = 'https://valhalla1.openstreetmap.de/route';
@@ -548,17 +657,19 @@ const R = 6371000, cosLat = Math.cos(41.31 * Math.PI / 180);
 function toXY(lat, lon){ return [lon * Math.PI / 180 * R * cosLat, lat * Math.PI / 180 * R]; }
 const bannedSegs = [];
 DATA.banned.features.forEach(f => { const c = f.geometry.coordinates; for (let i = 1; i < c.length; i++) bannedSegs.push([toXY(c[i-1][1], c[i-1][0]), toXY(c[i][1], c[i][0]), f.properties.n]); });
-function nearBanned(pt){
+function nearestBanned(pt, maxDist){
   const [px, py] = toXY(pt[0], pt[1]);
+  let best = null;
   for (const [a, b, name] of bannedSegs) {
-    if (Math.abs(a[0] - px) > 60 && Math.abs(b[0] - px) > 60) continue;
+    if (Math.abs(a[0] - px) > maxDist + 300 && Math.abs(b[0] - px) > maxDist + 300) continue;
     const dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx*dx + dy*dy;
     let t = len2 ? ((px - a[0]) * dx + (py - a[1]) * dy) / len2 : 0; t = Math.max(0, Math.min(1, t));
-    const ex = a[0] + t*dx - px, ey = a[1] + t*dy - py;
-    if (ex*ex + ey*ey < 12*12) return name;
+    const ex = a[0] + t*dx - px, ey = a[1] + t*dy - py, d2 = ex*ex + ey*ey;
+    if (d2 < maxDist * maxDist && (!best || d2 < best.d2)) best = {name, d2};
   }
-  return null;
+  return best ? {name:best.name, dist:Math.sqrt(best.d2)} : null;
 }
+function nearBanned(pt){ const n = nearestBanned(pt, 12); return n ? n.name : null; }
 async function buildRoute(){
   if (!rtA || !rtB) return;
   const a = rtA.getLatLng(), b = rtB.getLatLng(), my = ++rtReq;
@@ -574,7 +685,7 @@ async function buildRoute(){
     if (rtLine) { map.removeLayer(rtLine); map.removeLayer(rtCasing); }
     rtCasing = L.polyline(pts, {color:'#fff', weight:9, opacity:0.9, interactive:false}).addTo(map);
     rtLine = L.polyline(pts, {color:'#2563eb', weight:5, opacity:0.95, interactive:false}).addTo(map);
-    if (state.banned) layers.banned.bringToFront();
+    if (state.banned) bannedLines.bringToFront();
     map.fitBounds(rtLine.getBounds(), {paddingTopLeft:[30, 150], paddingBottomRight:[30, 220]});
     // sanity check against red segments
     // flag only when the route runs *along* a red segment (>60 m), not when it merely crosses one at a junction

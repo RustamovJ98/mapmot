@@ -107,7 +107,27 @@ def build_banned():
             props["comment"] = src["comment"][:140]
         feats.append(feature("LineString", way_coords(w), props))
     print("  ban sources:", conf_count)
-    return fc(feats)
+    return fc(feats), build_entries(feats)
+
+
+def build_entries(banned_feats):
+    """Points where a banned way ends without continuing into another banned way = entry into the zone."""
+    count = {}
+    for f in banned_feats:
+        for c in f["geometry"]["coordinates"]:
+            key = (round(c[0], 6), round(c[1], 6))
+            count[key] = count.get(key, 0) + 1
+    entries, seen = [], set()
+    for f in banned_feats:
+        coords = f["geometry"]["coordinates"]
+        for c in (coords[0], coords[-1]):
+            key = (round(c[0], 6), round(c[1], 6))
+            if count[key] == 1 and key not in seen:
+                seen.add(key)
+                p = f["properties"]
+                entries.append(feature("Point", [c[0], c[1]], {"n": p["n"], "conf": p["conf"], "src": p["src"], "way": p["id"]}))
+    print("  zone entries:", len(entries))
+    return fc(entries)
 
 
 # ------------------------------------------------------------- corridors
@@ -327,7 +347,7 @@ def build_style():
 
 def main():
     build_style()
-    banned = build_banned()
+    banned, entries = build_banned()
     banned_ids = {f["properties"]["id"] for f in banned["features"]}
     corridors, counts = build_corridors(banned_ids)
     hazards = build_hazards()
@@ -338,7 +358,7 @@ def main():
     tmpl = (ROOT / "build" / "template.html").read_text(encoding="utf-8")
     marks_path = ROOT / "data" / "marks.json"
     marks = json.loads(marks_path.read_text(encoding="utf-8")) if marks_path.exists() else []
-    data = {"banned": banned, "corridors": corridors, "hazards": hazards, "radars": radars, "pois": pois,
+    data = {"banned": banned, "entries": entries, "corridors": corridors, "hazards": hazards, "radars": radars, "pois": pois,
             "marks": marks, "osmDate": osm_date,
             "stats": {"banned": len(banned["features"]), "corridors": counts, "radars": len(radars["features"]),
                       "hazards": len(hazards["features"]), "pois": len(pois["features"])}}
