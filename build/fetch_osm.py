@@ -50,8 +50,10 @@ out tags geom;
   way["hazard"]({BBOX});
   way["highway"~"^(trunk|primary|secondary|tertiary)(_link)?$"]["surface"~"^(unpaved|gravel|cobblestone|sett|dirt|ground|compacted|paving_stones|concrete:plates)$"]({BBOX});
   way["highway"~"^(trunk|primary|secondary|tertiary)(_link)?$"]["smoothness"~"^(bad|very_bad|horrible|very_horrible|impassable)$"]({BBOX});
-);
-out tags geom;
+)->.a;
+.a out tags geom;
+relation["type"="enforcement"]({BBOX})->.b;
+.b out tags center;
 """,
     # Useful POIs for a rider
     "pois": f"""

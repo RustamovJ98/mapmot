@@ -26,6 +26,9 @@ jobs:
       - name: Fetch fresh OSM data
         run: python build/fetch_osm.py --force
 
+      - name: Fetch edit history for new banned ways
+        run: python build/fetch_ban_history.py
+
       - name: Build map
         run: python build/build_map.py
 
@@ -33,7 +36,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/
+          git add docs/ data/ban_sources.json
           if git diff --cached --quiet; then
             echo "No changes"
             exit 0

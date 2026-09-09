@@ -62,7 +62,7 @@
   .sheet h3{margin:0 0 2px;font-size:17px;display:flex;align-items:center;gap:8px}
   .sheet h3 .dot{width:12px;height:12px;border-radius:50%;flex:none}
   .sheet .sub{color:var(--muted);font-size:13px;margin-bottom:6px}
-  .sheet p{margin:6px 0}
+  .sheet p{margin:6px 0;white-space:pre-line}
   .sheet .meta{font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
   .sheet .meta a{color:var(--blue);text-decoration:none}
   .sheet .close{position:absolute;right:8px;top:8px;width:32px;height:32px;border-radius:50%;border:none;background:#f3f4f6;font-size:18px;cursor:pointer}
@@ -124,8 +124,9 @@
     <button class="chip" data-layer="banned" style="--c:var(--red)"><span class="dot"></span>Запрет</button>
     <button class="chip" data-layer="corridors" style="--c:var(--green)"><span class="dot"></span>Коридоры</button>
     <button class="chip" data-layer="hazards" style="--c:var(--orange)"><span class="dot"></span>Опасности</button>
+    <button class="chip" data-layer="radars" style="--c:var(--purple)"><span class="dot"></span>Радары</button>
     <button class="chip" data-layer="pois" style="--c:var(--blue)"><span class="dot"></span>АЗС / сервис</button>
-    <button class="chip" data-layer="marks" style="--c:var(--purple)"><span class="dot"></span>Отметки</button>
+    <button class="chip" data-layer="marks" style="--c:#db2777"><span class="dot"></span>Отметки</button>
   </div>
 </div>
 
@@ -143,12 +144,12 @@
   <div><span class="ln" style="background:var(--orange)"></span>Плохое покрытие</div>
   <div><span class="pt" style="background:var(--orange)"></span>Лежачий полицейский</div>
   <div><span class="pt" style="background:#78350f"></span>Ж/д переезд</div>
-  <div><span class="pt" style="background:var(--purple)"></span>Камера</div>
+  <div><span class="pt" style="background:var(--purple)"></span>Радар скорости / камера на светофоре</div>
   <div><span class="pt" style="background:var(--blue)"></span>АЗС с бензином</div>
   <div><span class="pt" style="background:#93c5fd"></span>АЗС, топливо не указано</div>
   <div><span class="pt" style="background:#0f766e"></span>Мотосервис / шиномонтаж / мотопарковка</div>
-  <div><span class="pt" style="background:var(--purple)"></span>Отметки: общие и ваши (пунктирная рамка)</div>
-  <p>Карта не заменяет дорожные знаки. Данные OpenStreetMap, проверяйте на месте. Точки опасностей видны от 14-го зума.</p>
+  <div><span class="pt" style="background:#db2777"></span>Отметки: общие и ваши (пунктирная рамка)</div>
+  <p>Карта не заменяет дорожные знаки. Данные OpenStreetMap, проверяйте на месте. В карточке запрета показано, кто и когда его отметил: по знакам, массовой правкой или давно. Точки опасностей видны от 14-го зума.</p>
   <p>Своя отметка: долгое нажатие на карту или кнопка «＋». Хранятся в этом браузере.</p>
   <div class="tools">
     <button class="btn" id="btnExport">Экспорт отметок</button>
@@ -207,7 +208,7 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 document.getElementById('osmdate').textContent = 'OSM ' + DATA.osmDate;
 
-const renderer = L.canvas({padding:0.5, tolerance:10});
+const renderer = L.canvas({padding:0.5, tolerance:14});
 
 /* ---------- info sheet ---------- */
 const sheet = document.getElementById('sheet');
@@ -255,7 +256,7 @@ const hazardLines = L.geoJSON({type:'FeatureCollection', features:DATA.hazards.f
     showSheet('#f59e0b', p.n || p.label, p.h, p.label, osmLink('way', p.id));
   })
 });
-const hazardColor = {bump:'#f59e0b', crossing:'#78350f', camera:'#7c3aed', hazard:'#dc2626'};
+const hazardColor = {bump:'#f59e0b', crossing:'#78350f', hazard:'#dc2626'};
 const hazardPoints = L.geoJSON({type:'FeatureCollection', features:DATA.hazards.features.filter(f => f.geometry.type === 'Point')}, {
   pointToLayer:(f, ll) => L.circleMarker(ll, {renderer, radius:6, color:'#fff', weight:2, fillColor:hazardColor[f.properties.kind] || '#f59e0b', fillOpacity:1}),
   onEachFeature:(f, l) => l.on('click', e => {
@@ -266,19 +267,43 @@ const hazardPoints = L.geoJSON({type:'FeatureCollection', features:DATA.hazards.
 });
 hazardLines.addTo(layers.hazards);
 
-const poiColor = {petrol:'#2563eb', fuel_unknown:'#93c5fd', moto:'#0f766e', tyres:'#0f766e', parking:'#0f766e'};
-layers.pois = L.geoJSON(DATA.pois, {
-  pointToLayer:(f, ll) => L.circleMarker(ll, {renderer, radius:f.properties.kind === 'moto' ? 8 : 6, color:'#fff', weight:2, fillColor:poiColor[f.properties.kind], fillOpacity:1}),
+// radars (speed cameras + enforcement zones)
+layers.radars = L.geoJSON(DATA.radars, {
+  pointToLayer:(f, ll) => L.circleMarker(ll, {renderer, radius:7, color:'#fff', weight:2, fillColor:'#7c3aed', fillOpacity:1}),
   onEachFeature:(f, l) => l.on('click', e => {
     L.DomEvent.stopPropagation(e);
     const p = f.properties;
-    const meta = [];
-    if (p.hours) meta.push('<span>'+esc(p.hours)+'</span>');
-    if (p.phone) meta.push('<a href="tel:'+esc(p.phone)+'">'+esc(p.phone)+'</a>');
+    const title = '📷 ' + p.label + (p.maxspeed ? ' · ' + p.maxspeed + ' км/ч' : '');
+    const sub = [p.dir, p.n].filter(Boolean).join(' · ');
     const [lon, lat] = f.geometry.coordinates;
-    meta.push('<a href="https://www.google.com/maps/dir/?api=1&destination='+lat+','+lon+'" target="_blank" rel="noopener">Маршрут ↗</a>');
+    showSheet('#7c3aed', title, sub || 'Радар', p.maxspeed ? 'Ограничение ' + p.maxspeed + ' км/ч. Сбросьте скорость заранее.' : 'Ограничение скорости в OSM не указано.',
+      '<span>' + lat.toFixed(5) + ', ' + lon.toFixed(5) + '</span>' + osmLink(p.t, p.id));
+  })
+});
+
+const poiColor = {petrol:'#2563eb', fuel_unknown:'#93c5fd', moto:'#0f766e', tyres:'#0f766e', parking:'#0f766e'};
+const poiKind = {petrol:'АЗС', fuel_unknown:'АЗС', moto:'Мотосервис', tyres:'Шиномонтаж', parking:'Мотопарковка'};
+function distanceText(lat, lon){
+  if (!userMarker) return '';
+  const d = map.distance(userMarker.getLatLng(), [lat, lon]);
+  return d < 1000 ? Math.round(d) + ' м от вас' : (d / 1000).toFixed(1) + ' км от вас';
+}
+layers.pois = L.geoJSON(DATA.pois, {
+  pointToLayer:(f, ll) => L.circleMarker(ll, {renderer, radius:f.properties.kind === 'moto' ? 9 : 7, color:'#fff', weight:2, fillColor:poiColor[f.properties.kind], fillOpacity:1}),
+  onEachFeature:(f, l) => l.on('click', e => {
+    L.DomEvent.stopPropagation(e);
+    const p = f.properties;
+    const [lon, lat] = f.geometry.coordinates;
+    const sub = [poiKind[p.kind], p.brand, distanceText(lat, lon)].filter(Boolean).join(' · ');
+    const body = [p.sub, p.addr ? 'Адрес: ' + p.addr : '', p.hours ? 'Часы: ' + p.hours : ''].filter(Boolean).join('\n');
+    const meta = [];
+    if (p.phone) meta.push('<a href="tel:'+esc(p.phone)+'">'+esc(p.phone)+'</a>');
+    if (p.site) meta.push('<a href="'+esc(p.site)+'" target="_blank" rel="noopener">Сайт ↗</a>');
+    meta.push('<a href="https://www.google.com/maps/dir/?api=1&destination='+lat+','+lon+'" target="_blank" rel="noopener">Google Maps ↗</a>');
     meta.push(osmLink(p.t, p.id));
-    showSheet(poiColor[p.kind], p.label, p.sub, '', meta.join(''));
+    showSheet(poiColor[p.kind], p.label, sub, body, meta.join(''), [
+      {label:'🧭 Маршрут сюда', cls:'primary', fn:() => routeTo(L.latLng(lat, lon))},
+    ]);
   })
 });
 
@@ -287,7 +312,10 @@ layers.banned = L.geoJSON(DATA.banned, {
   onEachFeature:(f, l) => l.on('click', e => {
     L.DomEvent.stopPropagation(e);
     const p = f.properties;
-    showSheet('#e11d48', p.n, p.reason + ' · ' + p.h, 'В OpenStreetMap отмечено: ' + p.tag + '. Проверяйте знаки на въезде.', extra(p) + osmLink('way', p.id));
+    const confIcon = {sign:'✅', bulk:'⚠️', old:'⏳', closed:'🚫', osm:'ℹ️', unknown:'❔'}[p.conf] || 'ℹ️';
+    showSheet('#e11d48', p.n, p.reason + ' · ' + p.h,
+      confIcon + ' ' + p.src + '.\nВ OSM: ' + p.tag + (p.comment ? '\nКомментарий правки: «' + p.comment + '»' : ''),
+      extra(p) + osmLink('way', p.id));
   })
 });
 
@@ -398,8 +426,8 @@ document.getElementById('btnImport').onclick = () => {
 renderMarks();
 
 /* ---------- chips / persistence ---------- */
-const order = ['corridors', 'hazards', 'pois', 'banned', 'marks']; // banned drawn on top of lines, marks are DOM markers
-let state = {banned:true, corridors:true, hazards:false, pois:false, marks:true};
+const order = ['corridors', 'hazards', 'radars', 'pois', 'banned', 'marks']; // banned drawn on top of lines, marks are DOM markers
+let state = {banned:true, corridors:true, hazards:false, radars:false, pois:false, marks:true};
 try { Object.assign(state, JSON.parse(localStorage.getItem('mapmot.layers') || '{}')); } catch (e) {}
 function applyLayers(){
   order.forEach(k => { if (state[k]) { if (!map.hasLayer(layers[k])) layers[k].addTo(map); } else map.removeLayer(layers[k]); });
@@ -551,6 +579,13 @@ function setRouteMode(on){
   if (on) { sheet.classList.remove('show'); form.classList.remove('show'); stopAddMode(); if (!rtA) toast('Нажмите на карту: откуда ехать'); }
 }
 btnRoute.onclick = () => setRouteMode(!routeMode);
+// "route here" from a POI card: destination = point, start = my position (or ask to tap)
+function routeTo(ll){
+  setRouteMode(true);
+  setPoint('B', ll);
+  if (userMarker) setPoint('A', userMarker.getLatLng());
+  else if (!rtA) { rp.status.textContent = 'Нажмите «я здесь» или укажите старт на карте.'; toast('Откуда ехать? Нажмите «я здесь» или на карту'); }
+}
 document.getElementById('routeClose').onclick = () => setRouteMode(false);
 document.getElementById('rpClear').onclick = clearRoute;
 document.getElementById('rpMyLoc').onclick = () => {

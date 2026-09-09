@@ -56,25 +56,57 @@ def fc(features):
 
 
 # ---------------------------------------------------------------- banned
+SIGN_WORDS = ("rider", "sign", "знак", "motorcycle", "мотоцикл", "restricted area")
+
+
+def source_note(src, closed):
+    """Turn OSM edit history into a confidence label + short note."""
+    if not src or not src.get("date"):
+        return "unknown", "Источник правки не найден"
+    year = int(src["date"][:4])
+    comment = (src.get("comment") or "").lower()
+    who = f"{src.get('user', '?')}, {src['date']}"
+    if closed:
+        return "closed", f"Дорога закрыта для всех ({who})"
+    if any(k in comment for k in SIGN_WORDS):
+        return "sign", f"Отмечено по дорожным знакам ({who})"
+    if "#wbgeo" in comment:
+        return "bulk", f"Массовая правка по панорамам ({who}). Стоит проверить знак на месте"
+    if year < 2020:
+        return "old", f"Старые данные ({who}). Могли устареть, проверьте знак"
+    return "osm", f"Правка OSM ({who})"
+
+
 def build_banned():
+    src_path = ROOT / "data" / "ban_sources.json"
+    sources = json.loads(src_path.read_text(encoding="utf-8")) if src_path.exists() else {}
     feats = []
+    conf_count = {}
     for w in load("banned"):
         t = w["tags"]
         if t.get("name") == "разворот":
             continue
+        closed = False
         if t.get("motorcycle") in ("no", "private"):
             reason, tag = "Мотоциклам запрещено", "motorcycle=" + t["motorcycle"]
         elif t.get("motorcycle:conditional"):
             reason, tag = "Запрет по условию", "motorcycle:conditional=" + t["motorcycle:conditional"]
         elif t.get("motor_vehicle") in ("no", "private"):
-            reason, tag = "Закрыто для моторного транспорта", "motor_vehicle=" + t["motor_vehicle"]
+            reason, tag, closed = "Закрыто для моторного транспорта", "motor_vehicle=" + t["motor_vehicle"], True
         else:
-            reason, tag = "Проезд закрыт", "access=" + str(t.get("access"))
-        feats.append(feature("LineString", way_coords(w), {
+            reason, tag, closed = "Проезд закрыт", "access=" + str(t.get("access")), True
+        src = sources.get(str(w["id"]), {})
+        conf, note = source_note(src, closed)
+        conf_count[conf] = conf_count.get(conf, 0) + 1
+        props = {
             "id": w["id"], "n": ru_name(t) or "Без названия", "h": hw_ru(t),
-            "reason": reason, "tag": tag,
+            "reason": reason, "tag": tag, "conf": conf, "src": note,
             "lanes": t.get("lanes"), "maxspeed": t.get("maxspeed"),
-        }))
+        }
+        if src.get("comment"):
+            props["comment"] = src["comment"][:140]
+        feats.append(feature("LineString", way_coords(w), props))
+    print("  ban sources:", conf_count)
     return fc(feats)
 
 
@@ -117,14 +149,15 @@ def build_hazards():
     feats = []
     for e in load("hazards"):
         t = e["tags"]
+        if e["type"] == "relation":
+            continue  # enforcement relations go to the radars layer
         if e["type"] == "node":
             if t.get("traffic_calming"):
                 kind, label = "bump", CALMING_RU.get(t["traffic_calming"], "Искусственная неровность")
             elif t.get("railway") == "level_crossing":
                 kind, label = "crossing", "Ж/д переезд"
             elif t.get("highway") == "speed_camera":
-                kind = "camera"
-                label = "Камера" + ((" · " + t["maxspeed"] + " км/ч") if t.get("maxspeed") else "")
+                continue  # radars layer
             elif t.get("hazard"):
                 kind, label = "hazard", "Опасность: " + t["hazard"]
             else:
@@ -141,6 +174,50 @@ def build_hazards():
                 continue
             feats.append(feature("LineString", way_coords(e), {"kind": "surface", "label": label,
                                                                 "n": ru_name(t), "h": hw_ru(t), "id": e["id"]}))
+    return fc(feats)
+
+
+# ---------------------------------------------------------------- radars
+DIR_RU = {"forward": "по ходу", "backward": "против хода", "both": "в обе стороны"}
+ENF_RU = {"maxspeed": ("speed", "Радар скорости"), "traffic_signals": ("signals", "Камера на светофоре"),
+          "maxheight": ("height", "Контроль высоты"), "average_speed": ("avg", "Средняя скорость"),
+          "check": ("check", "Пост контроля")}
+
+
+def direction_ru(v):
+    if not v:
+        return None
+    if v in DIR_RU:
+        return DIR_RU[v]
+    if v.replace(".", "").isdigit():
+        return f"направление {v}°"
+    return v
+
+
+def build_radars():
+    import math
+    feats, cams = [], []
+    for e in load("hazards"):
+        t = e["tags"]
+        if e["type"] == "node" and t.get("highway") == "speed_camera":
+            enf = t.get("enforcement", "maxspeed")
+            kind, label = ENF_RU.get(enf, ("speed", "Радар скорости"))
+            cams.append((e["lat"], e["lon"]))
+            feats.append(feature("Point", [rnd(e["lon"]), rnd(e["lat"])], {
+                "kind": kind, "label": label, "maxspeed": t.get("maxspeed"), "dir": direction_ru(t.get("direction")),
+                "n": t.get("name:ru") or t.get("name") or t.get("description"), "id": e["id"], "t": "node"}))
+    # enforcement relations: add only if there is no camera node within ~40 m
+    for e in load("hazards"):
+        t = e["tags"]
+        if e["type"] != "relation" or "center" not in e:
+            continue
+        lat, lon = e["center"]["lat"], e["center"]["lon"]
+        if any(math.hypot((lat - a) * 110574, (lon - b) * 111320 * 0.75) < 40 for a, b in cams):
+            continue
+        kind, label = ENF_RU.get(t.get("enforcement", ""), ("other", "Контроль"))
+        feats.append(feature("Point", [rnd(lon), rnd(lat)], {
+            "kind": kind, "label": label, "maxspeed": t.get("maxspeed"), "dir": None,
+            "n": t.get("name:ru") or t.get("name") or t.get("description"), "id": e["id"], "t": "relation"}))
     return fc(feats)
 
 
@@ -172,30 +249,46 @@ def build_pois():
             lon, lat = e["lon"], e["lat"]
         else:
             lon, lat = e["center"]["lon"], e["center"]["lat"]
+        name = t.get("name:ru") or t.get("name") or ""
         if t.get("amenity") == "fuel":
             kind = classify_fuel(t)
             if not kind:
                 continue
-            octanes = sorted(k.split("_")[1] for k, v in t.items() if k.startswith("fuel:octane_") and v == "yes")
-            label = t.get("brand") or t.get("name") or t.get("operator") or "АЗС"
-            if octanes:
-                sub = "АИ-" + ", АИ-".join(octanes)
+            fuels = ["АИ-" + k.split("_")[1] for k, v in sorted(t.items()) if k.startswith("fuel:octane_") and v == "yes"]
+            if t.get("fuel:diesel") == "yes":
+                fuels.append("дизель")
+            if t.get("fuel:cng") == "yes":
+                fuels.append("метан")
+            if t.get("fuel:lpg") == "yes":
+                fuels.append("пропан")
+            label = name or t.get("brand") or t.get("operator") or "АЗС"
+            if fuels:
+                sub = ", ".join(fuels)
             else:
-                sub = "бензин" if kind == "petrol" else "тип топлива не указан"
+                sub = "бензин" if kind == "petrol" else "виды топлива в OSM не указаны"
         elif t.get("shop") in ("motorcycle", "motorcycle_repair") or t.get("craft") == "motorcycle_repair":
-            kind, label, sub = "moto", t.get("name") or "Мотосалон / мотосервис", "мотоциклы"
+            kind, label, sub = "moto", name or "Мотосалон / мотосервис", "мотоциклы, запчасти, сервис"
         elif t.get("amenity") == "motorcycle_parking":
-            kind, label, sub = "parking", t.get("name") or "Мотопарковка", "парковка для мото"
+            kind, label, sub = "parking", name or "Мотопарковка", "парковка для мото"
         elif t.get("shop") == "tyres" or t.get("service") == "tyres":
-            kind, label, sub = "tyres", t.get("name") or "Шиномонтаж", "шиномонтаж"
+            kind, label, sub = "tyres", name or "Шиномонтаж", "шиномонтаж"
         else:
             continue
         props = {"kind": kind, "label": label, "sub": sub, "id": e["id"], "t": e["type"]}
+        brand = t.get("brand") or t.get("operator")
+        if brand and brand != label:
+            props["brand"] = brand
         if t.get("opening_hours"):
             props["hours"] = t["opening_hours"]
         phone = t.get("phone") or t.get("contact:phone")
         if phone:
-            props["phone"] = phone
+            props["phone"] = phone.split(";")[0].strip()
+        site = t.get("website") or t.get("contact:website")
+        if site:
+            props["site"] = site
+        addr = " ".join(x for x in (t.get("addr:street"), t.get("addr:housenumber")) if x)
+        if addr:
+            props["addr"] = addr
         feats.append(feature("Point", [rnd(lon), rnd(lat)], props))
     return fc(feats)
 
@@ -205,15 +298,16 @@ def main():
     banned_ids = {f["properties"]["id"] for f in banned["features"]}
     corridors, counts = build_corridors(banned_ids)
     hazards = build_hazards()
+    radars = build_radars()
     pois = build_pois()
     osm_date = json.loads((RAW / "banned.json").read_text(encoding="utf-8"))["osm3s"]["timestamp_osm_base"][:10]
 
     tmpl = (ROOT / "build" / "template.html").read_text(encoding="utf-8")
     marks_path = ROOT / "data" / "marks.json"
     marks = json.loads(marks_path.read_text(encoding="utf-8")) if marks_path.exists() else []
-    data = {"banned": banned, "corridors": corridors, "hazards": hazards, "pois": pois, "marks": marks,
-            "osmDate": osm_date,
-            "stats": {"banned": len(banned["features"]), "corridors": counts,
+    data = {"banned": banned, "corridors": corridors, "hazards": hazards, "radars": radars, "pois": pois,
+            "marks": marks, "osmDate": osm_date,
+            "stats": {"banned": len(banned["features"]), "corridors": counts, "radars": len(radars["features"]),
                       "hazards": len(hazards["features"]), "pois": len(pois["features"])}}
     js = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     out = tmpl.replace("/*__DATA__*/null", js)
@@ -225,8 +319,10 @@ def main():
     (DIST / "index.html").write_text(out, encoding="utf-8")
     (DIST / "sw.js").write_text((static / "sw.js").read_text(encoding="utf-8").replace("__VERSION__", version), encoding="utf-8")
     (DIST / ".nojekyll").write_text("", encoding="utf-8")
-    print("banned %d | corridors %d %s | hazards %d | pois %d | OSM %s" % (
-        len(banned["features"]), sum(counts.values()), counts, len(hazards["features"]), len(pois["features"]), osm_date))
+    print("banned %d | corridors %d | hazards %d | radars %d | pois %d | OSM %s" % (
+        len(banned["features"]), sum(counts.values()), len(hazards["features"]), len(radars["features"]),
+        len(pois["features"]), osm_date))
+    print("  corridors:", counts)
     print("docs/index.html %d KB" % (len(out.encode("utf-8")) // 1024))
 
 
