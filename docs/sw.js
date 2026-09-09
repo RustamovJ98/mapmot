@@ -1,12 +1,12 @@
 /* MapMot service worker: offline app shell + on-demand tile cache. */
-const VERSION = '3166aafd63';
+const VERSION = 'ed84176f72';
 const SHELL = 'mapmot-shell-' + VERSION;
 const TILES = 'mapmot-tiles-v1';
 const TILE_HOSTS = ['tile.openstreetmap.org', 'tiles.openfreemap.org'];
 const MAX_TILES = 6000;
 const SHELL_URLS = ['./', './index.html', './vendor/leaflet.min.js', './vendor/leaflet.min.css',
   './vendor/maplibre-gl.js', './vendor/maplibre-gl.css', './vendor/leaflet-maplibre-gl.js', './style/liberty-ru.json',
-  './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-512-maskable.png'];
+  './manifest.webmanifest', './icons/moto.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-512-maskable.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(SHELL).then(c => c.addAll(SHELL_URLS)).then(() => self.skipWaiting()));

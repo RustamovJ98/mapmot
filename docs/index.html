@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="mobile-web-app-capable" content="yes">
 <title>Мото-карта Ташкента</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23e5322d'/%3E%3Ctext x='32' y='42' font-size='30' text-anchor='middle'%3E%F0%9F%8F%8D%3C/text%3E%3C/svg%3E">
+<link rel="icon" type="image/svg+xml" href="icons/moto.svg">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="vendor/leaflet.min.css">
@@ -129,7 +129,7 @@
 <div id="map"></div>
 
 <div class="topbar">
-  <div class="title">🏍️ <b>Мото-карта Ташкента</b><small id="osmdate"></small><span class="offline" id="offline">офлайн</span></div>
+  <div class="title"><img src="icons/moto.svg" alt="" width="24" height="24" style="display:block"> <b>Мото-карта Ташкента</b><small id="osmdate"></small><span class="offline" id="offline">офлайн</span></div>
   <div class="chips" id="chips">
     <button class="chip" data-layer="banned" style="--c:var(--red)"><span class="dot"></span>Запрет</button>
     <button class="chip" data-layer="corridors" style="--c:var(--green)"><span class="dot"></span>Коридоры</button>
@@ -723,7 +723,7 @@ map.on('click', e => {
 });
 
 /* ---------- offline: service worker, tile prefetch, status ---------- */
-const APP_VERSION = '3166aafd63';
+const APP_VERSION = 'ed84176f72';
 function setOnline(){ document.body.classList.toggle('offline', !navigator.onLine); }
 window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); });
 window.addEventListener('offline', () => { setOnline(); toast('Нет связи: работаю офлайн'); });
