@@ -82,6 +82,10 @@
   .toast{position:fixed;left:50%;transform:translateX(-50%);top:calc(150px + var(--safe-top));z-index:1002;background:#111;color:#fff;
     padding:8px 14px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
   .toast.show{opacity:.92}
+  .update{position:fixed;left:50%;transform:translateX(-50%);top:calc(150px + var(--safe-top));z-index:1002;background:#111;color:#fff;
+    padding:8px 8px 8px 14px;border-radius:12px;font-size:14px;display:none;align-items:center;gap:10px;box-shadow:var(--shadow)}
+  .update.show{display:flex}
+  .update .btn{flex:none;padding:6px 12px}
 
   /* marks */
   .mark{width:30px;height:30px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:2px solid #fff;
@@ -180,6 +184,7 @@
     <button class="btn" id="btnSaveArea">Сохранить район</button>
     <button class="btn" id="btnClearTiles">Очистить (<span id="tileCount">…</span>)</button>
   </div>
+  <p>Версия сборки: <span id="buildVersion"></span></p>
 </div>
 
 <div class="sheet" id="sheet">
@@ -222,6 +227,7 @@
   </div>
 </div>
 <div class="toast" id="toast"></div>
+<div class="update" id="updateBar">Есть новая версия карты <button class="btn primary" onclick="location.reload()">Обновить</button></div>
 
 <script src="vendor/leaflet.min.js"></script>
 <script src="vendor/maplibre-gl.js"></script>
@@ -593,7 +599,9 @@ function applyLayers(){
 }
 document.getElementById('chips').addEventListener('click', e => {
   const c = e.target.closest('.chip'); if (!c) return;
-  state[c.dataset.layer] = !state[c.dataset.layer]; applyLayers();
+  const k = c.dataset.layer;
+  state[k] = !state[k]; applyLayers();
+  if (state[k] && pointsMinZoom[k] && map.getZoom() < pointsMinZoom[k]) toast('Значки видны от ' + pointsMinZoom[k] + '-го зума, приблизьте карту');
 });
 applyLayers();
 
@@ -764,6 +772,7 @@ map.on('click', e => {
 
 /* ---------- offline: service worker, tile prefetch, status ---------- */
 const APP_VERSION = '__VERSION__';
+document.getElementById('buildVersion').textContent = APP_VERSION;
 function setOnline(){ document.body.classList.toggle('offline', !navigator.onLine); }
 window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); });
 window.addEventListener('offline', () => { setOnline(); toast('Нет связи: работаю офлайн'); });
@@ -788,7 +797,7 @@ if ('serviceWorker' in navigator) {
     swReg = reg;
     reg.addEventListener('updatefound', () => {
       const nw = reg.installing;
-      nw && nw.addEventListener('statechange', () => { if (nw.state === 'installed' && navigator.serviceWorker.controller) toast('Есть новая версия карты, обновите страницу'); });
+      nw && nw.addEventListener('statechange', () => { if (nw.state === 'installed' && navigator.serviceWorker.controller) document.getElementById('updateBar').classList.add('show'); });
     });
     if (navigator.serviceWorker.controller) refreshTileCount();
   }).catch(() => {});
