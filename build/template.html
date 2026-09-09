@@ -639,12 +639,12 @@ const rp = {from:document.getElementById('rpFrom'), to:document.getElementById('
             google:document.getElementById('rpGoogle'), yandex:document.getElementById('rpYandex')};
 let routeMode = false, rtA = null, rtB = null, rtLine = null, rtCasing = null, rtReq = 0;
 
-function pinIcon(label, color){ return L.divIcon({className:'', html:'<div class="rt-pin" style="--c:'+color+'">'+label+'</div>', iconSize:[26,26], iconAnchor:[13,13]}); }
+function routePinIcon(label, color){ return L.divIcon({className:'', html:'<div class="rt-pin" style="--c:'+color+'">'+label+'</div>', iconSize:[26,26], iconAnchor:[13,13]}); }
 function setPoint(which, ll){
   const color = which === 'A' ? '#16a34a' : '#e11d48';
   let m = which === 'A' ? rtA : rtB;
   if (!m) {
-    m = L.marker(ll, {icon:pinIcon(which, color), draggable:true, zIndexOffset:1000}).addTo(map);
+    m = L.marker(ll, {icon:routePinIcon(which, color), draggable:true, zIndexOffset:1000}).addTo(map);
     m.on('dragend', buildRoute);
     m.on('click', e => L.DomEvent.stopPropagation(e));
     if (which === 'A') rtA = m; else rtB = m;
