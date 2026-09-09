@@ -72,7 +72,9 @@
   .legend{position:fixed;left:8px;bottom:calc(30px + var(--safe-bottom));z-index:1000;background:var(--bg);border-radius:12px;box-shadow:var(--shadow);
     padding:10px 12px;font-size:13px;display:none;max-width:280px}
   .legend.show{display:block}
+  .legend{max-height:calc(100vh - 140px - var(--safe-bottom));overflow:auto}
   .legend div{display:flex;align-items:center;gap:8px;margin:3px 0}
+  .legend #legendPts{display:block;margin:0}
   .legend .ln{width:22px;height:5px;border-radius:3px;flex:none}
   .legend .pt{width:12px;height:12px;border-radius:50%;flex:none;border:2px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.25)}
   .legend p{margin:6px 0 0;color:var(--muted);font-size:12px}
@@ -112,6 +114,13 @@
   a.btn{text-align:center;text-decoration:none;color:inherit}
   a.btn.primary{color:#fff}
   .rt-pin{width:26px;height:26px;border-radius:50%;background:var(--c);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35);color:#fff;font-weight:700;font-size:13px;display:grid;place-items:center}
+  /* point pins with glyphs */
+  .pin{width:24px;height:24px;border-radius:50%;background:var(--c);border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35);display:grid;place-items:center}
+  .pin svg{width:15px;height:15px;display:block}
+  .pin.mini{width:18px;height:18px;flex:none}
+  .pin.mini svg{width:11px;height:11px}
+  .pin.big{width:28px;height:28px}
+  .pin.big svg{width:18px;height:18px}
   /* banned street extras */
   .ban-label{background:rgba(255,255,255,.85);color:#9f1239;font-size:11px;font-weight:700;padding:1px 5px;border-radius:6px;
     white-space:nowrap;border:1px solid #fda4af;transform:translate(-50%,-50%);width:max-content!important;pointer-events:none}
@@ -151,16 +160,11 @@
 <div class="legend" id="legend">
   <div><span class="ln" style="background:var(--red)"></span>Запрет, отмечен по знакам или дорога закрыта</div>
   <div><span class="ln" style="background:repeating-linear-gradient(90deg,var(--red) 0 8px,transparent 8px 13px)"></span>Запрет, не подтверждён: массовая правка или старые данные</div>
-  <div><span class="pt" style="background:#fff;border-color:var(--red)"></span>Въезд в зону запрета (от 15-го зума)</div>
+  <div><span class="pt" style="background:#fff;border-color:var(--red)"></span>Въезд в зону запрета (от 16-го зума)</div>
   <div class="tools"><button class="btn" id="btnBanList">Список запретов</button></div>
   <div><span class="ln" style="background:var(--green)"></span>Удобные коридоры (неофициально)</div>
   <div><span class="ln" style="background:var(--orange)"></span>Плохое покрытие</div>
-  <div><span class="pt" style="background:var(--orange)"></span>Лежачий полицейский</div>
-  <div><span class="pt" style="background:#78350f"></span>Ж/д переезд</div>
-  <div><span class="pt" style="background:var(--purple)"></span>Радар скорости / камера на светофоре</div>
-  <div><span class="pt" style="background:var(--blue)"></span>АЗС с бензином</div>
-  <div><span class="pt" style="background:#93c5fd"></span>АЗС, топливо не указано</div>
-  <div><span class="pt" style="background:#0f766e"></span>Мотосервис / шиномонтаж / мотопарковка</div>
+  <div id="legendPts"></div>
   <div><span class="pt" style="background:#db2777"></span>Отметки: общие и ваши (пунктирная рамка)</div>
   <p>Карта не заменяет дорожные знаки. Данные OpenStreetMap, проверяйте на месте. В карточке запрета показано, кто и когда его отметил: по знакам, массовой правкой или давно. Точки опасностей видны от 14-го зума.</p>
   <p>Своя отметка: долгое нажатие на карту или кнопка «＋». Хранятся в этом браузере.</p>
@@ -301,9 +305,28 @@ const hazardLines = L.geoJSON({type:'FeatureCollection', features:DATA.hazards.f
     showSheet('#f59e0b', p.n || p.label, p.h, p.label, osmLink('way', p.id));
   })
 });
+/* glyph pins: shape + colour, so layers differ even for colour-blind riders */
+const GLYPH = {
+  camera:   '<path d="M4 7h3.5l1.5-2h6l1.5 2H20v12H4z"/><circle cx="12" cy="13" r="3.3" fill="var(--c)"/><circle cx="12" cy="13" r="1.6"/>',
+  bump:     '<path d="M2 17c3-9 7-9 10 0s7 9 10 0" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M2 20h20" stroke="#fff" stroke-width="2" stroke-linecap="round"/>',
+  crossing: '<path d="M5 5l14 14M19 5L5 19" stroke="#fff" stroke-width="3.2" stroke-linecap="round"/>',
+  hazard:   '<path d="M12 3l10 18H2z"/><path d="M12 9v6M12 17.5v.5" stroke="var(--c)" stroke-width="2.2" stroke-linecap="round"/>',
+  fuel:     '<path d="M5 3h9a1 1 0 0 1 1 1v16H4V4a1 1 0 0 1 1-1z"/><rect x="6.5" y="5.5" width="6" height="4" fill="var(--c)"/><path d="M15 9h2l2.5 2.5V17a2 2 0 0 1-4 0v-3h-.5" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>',
+  wrench:   '<path d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.4 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"/>',
+  tyre:     '<circle cx="12" cy="12" r="7" fill="none" stroke="#fff" stroke-width="4.5"/><circle cx="12" cy="12" r="1.8"/>',
+  parking:  '<path d="M7 3h6.5a5.5 5.5 0 0 1 0 11H10v7H7z M10 6v5h3.5a2.5 2.5 0 0 0 0-5z"/>',
+};
+function pinHtml(glyph, color, cls){
+  return '<div class="pin' + (cls ? ' ' + cls : '') + '" style="--c:' + color + '"><svg viewBox="0 0 24 24" fill="#fff">' + GLYPH[glyph] + '</svg></div>';
+}
+function pinIcon(glyph, color, big){
+  const s = big ? 28 : 24;
+  return L.divIcon({className:'', html:pinHtml(glyph, color, big ? 'big' : ''), iconSize:[s, s], iconAnchor:[s / 2, s / 2]});
+}
 const hazardColor = {bump:'#f59e0b', crossing:'#78350f', hazard:'#dc2626'};
+const hazardGlyph = {bump:'bump', crossing:'crossing', hazard:'hazard'};
 const hazardPoints = L.geoJSON({type:'FeatureCollection', features:DATA.hazards.features.filter(f => f.geometry.type === 'Point')}, {
-  pointToLayer:(f, ll) => L.circleMarker(ll, {renderer, radius:6, color:'#fff', weight:2, fillColor:hazardColor[f.properties.kind] || '#f59e0b', fillOpacity:1}),
+  pointToLayer:(f, ll) => L.marker(ll, {icon:pinIcon(hazardGlyph[f.properties.kind] || 'hazard', hazardColor[f.properties.kind] || '#f59e0b')}),
   onEachFeature:(f, l) => l.on('click', e => {
     L.DomEvent.stopPropagation(e);
     const p = f.properties;
@@ -314,7 +337,7 @@ hazardLines.addTo(layers.hazards);
 
 // radars (speed cameras + enforcement zones)
 layers.radars = L.geoJSON(DATA.radars, {
-  pointToLayer:(f, ll) => L.circleMarker(ll, {renderer, radius:7, color:'#fff', weight:2, fillColor:'#7c3aed', fillOpacity:1}),
+  pointToLayer:(f, ll) => L.marker(ll, {icon:pinIcon('camera', '#7c3aed')}),
   onEachFeature:(f, l) => l.on('click', e => {
     L.DomEvent.stopPropagation(e);
     const p = f.properties;
@@ -327,14 +350,22 @@ layers.radars = L.geoJSON(DATA.radars, {
 });
 
 const poiColor = {petrol:'#2563eb', fuel_unknown:'#93c5fd', moto:'#0f766e', tyres:'#0f766e', parking:'#0f766e'};
+const poiGlyph = {petrol:'fuel', fuel_unknown:'fuel', moto:'wrench', tyres:'tyre', parking:'parking'};
 const poiKind = {petrol:'АЗС', fuel_unknown:'АЗС', moto:'Мотосервис', tyres:'Шиномонтаж', parking:'Мотопарковка'};
+// legend rows for point layers, drawn with the same pins
+document.getElementById('legendPts').innerHTML = [
+  ['bump', '#f59e0b', 'Лежачий полицейский'], ['crossing', '#78350f', 'Ж/д переезд'], ['hazard', '#dc2626', 'Опасное место (OSM hazard)'],
+  ['camera', '#7c3aed', 'Радар скорости / камера на светофоре'],
+  ['fuel', '#2563eb', 'АЗС с бензином'], ['fuel', '#93c5fd', 'АЗС, топливо не указано'],
+  ['wrench', '#0f766e', 'Мотосервис'], ['tyre', '#0f766e', 'Шиномонтаж'], ['parking', '#0f766e', 'Мотопарковка'],
+].map(([g, c, t]) => '<div>' + pinHtml(g, c, 'mini') + t + '</div>').join('');
 function distanceText(lat, lon){
   if (!userMarker) return '';
   const d = map.distance(userMarker.getLatLng(), [lat, lon]);
   return d < 1000 ? Math.round(d) + ' м от вас' : (d / 1000).toFixed(1) + ' км от вас';
 }
 layers.pois = L.geoJSON(DATA.pois, {
-  pointToLayer:(f, ll) => L.circleMarker(ll, {renderer, radius:f.properties.kind === 'moto' ? 9 : 7, color:'#fff', weight:2, fillColor:poiColor[f.properties.kind], fillOpacity:1}),
+  pointToLayer:(f, ll) => L.marker(ll, {icon:pinIcon(poiGlyph[f.properties.kind] || 'wrench', poiColor[f.properties.kind], f.properties.kind === 'moto')}),
   onEachFeature:(f, l) => l.on('click', e => {
     L.DomEvent.stopPropagation(e);
     const p = f.properties;
@@ -412,7 +443,7 @@ layers.banned = L.featureGroup([bannedLines]);
 function syncBanned(){
   const z = map.getZoom(), on = map.hasLayer(layers.banned);
   const want = (lyr, cond) => { if (on && cond) { if (!layers.banned.hasLayer(lyr)) layers.banned.addLayer(lyr); } else if (layers.banned.hasLayer(lyr)) layers.banned.removeLayer(lyr); };
-  want(banEntries, z >= 15); want(banLabels, z >= 15);
+  want(banEntries, z >= 16); want(banLabels, z >= 15);
 }
 map.on('zoomend', syncBanned);
 // list of banned streets
@@ -723,7 +754,7 @@ map.on('click', e => {
 });
 
 /* ---------- offline: service worker, tile prefetch, status ---------- */
-const APP_VERSION = 'ed84176f72';
+const APP_VERSION = 'f99bd00ec0';
 function setOnline(){ document.body.classList.toggle('offline', !navigator.onLine); }
 window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); });
 window.addEventListener('offline', () => { setOnline(); toast('Нет связи: работаю офлайн'); });
