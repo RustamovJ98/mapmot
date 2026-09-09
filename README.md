@@ -23,6 +23,12 @@ python build/build_map.py           # собрать docs/index.html
 python -m http.server 8765 --directory docs   # открыть http://localhost:8765
 ```
 
+## Автообновление
+
+Workflow `.github/workflows/update-map.yml` каждый понедельник скачивает свежие данные OSM, пересобирает `docs/index.html`
+и коммитит его, если что-то изменилось. GitHub Pages подхватывает коммит автоматически.
+Запустить вручную: вкладка Actions на GitHub, «Update map data», «Run workflow», либо `gh workflow run update-map.yml`.
+
 ## Слои
 
 | Слой | Источник | По умолчанию |
