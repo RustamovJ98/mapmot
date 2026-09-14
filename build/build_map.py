@@ -375,6 +375,26 @@ def build_style():
     return True
 
 
+def build_ru_names():
+    """name -> name:ru for Tashkent streets, written to docs/ru-names.json.
+
+    Valhalla speaks the OSM `name` (Uzbek Latin); ride mode loads this file and swaps in Russian names.
+    Kept out of index.html (a few hundred KB) so the map itself opens fast.
+    """
+    votes = {}
+    sources = [s for s in ("names", "network", "banned") if (RAW / f"{s}.json").exists()]
+    for src in sources:
+        for w in load(src):
+            t = w.get("tags", {})
+            n, ru = t.get("name"), t.get("name:ru")
+            if n and ru and n != ru:
+                votes.setdefault(n, {})
+                votes[n][ru] = votes[n].get(ru, 0) + 1
+    names = {n: max(c.items(), key=lambda kv: kv[1])[0] for n, c in votes.items()}
+    (DIST / "ru-names.json").write_text(json.dumps(names, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print("  ru street names: %d (from %s)" % (len(names), ", ".join(sources)))
+
+
 def main():
     build_style()
     banned, entries = build_banned()
@@ -391,6 +411,7 @@ def main():
         print(f"  ! WARNING: OSM data in data/raw is {age_days} days old. Run build/fetch_osm.py --force before publishing.")
 
     tmpl = (ROOT / "build" / "template.html").read_text(encoding="utf-8")
+    build_ru_names()
     marks_path = ROOT / "data" / "marks.json"
     marks = json.loads(marks_path.read_text(encoding="utf-8")) if marks_path.exists() else []
     data = {"banned": banned, "entries": entries, "corridors": corridors, "hazards": hazards, "radars": radars, "pois": pois,

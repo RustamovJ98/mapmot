@@ -69,6 +69,12 @@ relation["type"="enforcement"]({BBOX})->.b;
 );
 out tags center;
 """,
+    # Russian street names for ride-mode voice prompts (tags only, every named street of the city)
+    "names": f"""
+[out:json][timeout:180];
+way["highway"]["name"]["name:ru"]({BBOX});
+out tags;
+""",
 }
 
 

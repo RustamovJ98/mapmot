@@ -136,6 +136,25 @@
   .sheet .actions .btn.wide{flex-basis:100%}
   .btn.on{background:#111;color:#fff}
   #formStreet{margin:0 0 8px}
+  /* ride mode */
+  body.riding .topbar, body.riding .fabs, body.riding .legend, body.riding .sheet, body.riding .crosshair,
+  body.riding .update, body.riding .leaflet-control-zoom{display:none !important}
+  .ride-top{position:fixed;left:0;right:0;top:0;z-index:1003;background:#111;color:#fff;display:flex;align-items:center;gap:14px;
+    padding:calc(12px + var(--safe-top)) 16px 14px;box-shadow:0 2px 12px rgba(0,0,0,.35)}
+  .ride-top[hidden], .ride-bottom[hidden]{display:none}
+  .ride-arrow{width:60px;height:60px;flex:none}
+  .ride-arrow svg{width:60px;height:60px;display:block}
+  .ride-main{min-width:0}
+  .ride-dist{font-size:34px;font-weight:800;line-height:1.05}
+  .ride-text{font-size:17px;line-height:1.25;opacity:.92;margin-top:3px}
+  .ride-bottom{position:fixed;left:8px;right:8px;bottom:calc(10px + var(--safe-bottom));z-index:1003;background:var(--bg);border-radius:14px;
+    box-shadow:0 -2px 16px rgba(0,0,0,.2);padding:10px 12px}
+  .ride-stats{font-size:19px;font-weight:700;margin-bottom:8px}
+  .ride-stats small{display:block;font-size:13px;font-weight:500;color:var(--muted)}
+  .ride-btns{display:flex;gap:8px}
+  .ride-btns .btn{padding:12px 6px;font-size:15px}
+  .ride-me{width:30px;height:30px}
+  .ride-me svg{width:30px;height:30px;display:block}
   /* banned street extras */
   .ban-label{background:rgba(255,255,255,.85);color:#9f1239;font-size:11px;font-weight:700;padding:1px 5px;border-radius:6px;
     white-space:nowrap;border:1px solid #fda4af;transform:translate(-50%,-50%);width:max-content!important;pointer-events:none}
@@ -222,10 +241,11 @@
   <div class="rp-row"><span class="rp-dot" style="background:#16a34a"></span><span id="rpFrom" class="rp-val">Откуда: нажмите на карту</span><button class="btn small" id="rpMyLoc">◎ я здесь</button></div>
   <div class="rp-row"><span class="rp-dot" style="background:#e11d48"></span><span id="rpTo" class="rp-val">Куда: нажмите на карту</span></div>
   <div class="sub" id="rpStatus">Точки можно перетаскивать.</div>
+  <div class="row"><button class="btn primary hidden" id="rpRide">▶ Поехали по карте</button></div>
   <div class="row">
     <button class="btn" id="rpClear">Очистить</button>
-    <a class="btn primary hidden" id="rpGoogle" target="_blank" rel="noopener">Google Maps</a>
-    <a class="btn primary hidden" id="rpYandex" target="_blank" rel="noopener">Яндекс</a>
+    <a class="btn hidden" id="rpGoogle" target="_blank" rel="noopener">Google Maps</a>
+    <a class="btn hidden" id="rpYandex" target="_blank" rel="noopener">Яндекс</a>
   </div>
 </div>
 
@@ -238,6 +258,19 @@
   <div class="row">
     <button class="btn" id="formCancel">Отмена</button>
     <button class="btn primary" id="formSave">Сохранить</button>
+  </div>
+</div>
+<div class="ride-top" id="rideTop" hidden>
+  <div class="ride-arrow" id="rideArrow"></div>
+  <div class="ride-main"><div class="ride-dist" id="rideDist"></div><div class="ride-text" id="rideText"></div></div>
+</div>
+<div class="ride-bottom" id="rideBottom" hidden>
+  <div class="ride-stats" id="rideStats"></div>
+  <div class="ride-btns">
+    <button class="btn" id="rideVoice" title="Голос">🔊</button>
+    <button class="btn" id="rideOverview">Обзор</button>
+    <button class="btn" id="rideRecenter" hidden>◎ За мной</button>
+    <button class="btn danger" id="rideStop">Стоп</button>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -280,6 +313,7 @@ document.getElementById('osmdate').textContent = 'OSM ' + DATA.osmDate;
 const renderer = L.canvas({padding:0.5, tolerance:14});
 
 /* ---------- personal marks storage (loaded early: red street styling depends on sign reports) ---------- */
+let ride = null; // ride mode state (see "ride mode" section); declared early because UI guards read it
 let myMarks = [];
 try { const saved = JSON.parse(localStorage.getItem('mapmot.marks') || '[]'); if (Array.isArray(saved)) myMarks = saved; } catch (e) {}
 function saveMarks(){ try { localStorage.setItem('mapmot.marks', JSON.stringify(myMarks)); } catch (e) { toast('Не удалось сохранить'); } }
@@ -354,6 +388,7 @@ document.getElementById('legendSigns').innerHTML =
 /* ---------- info sheet ---------- */
 const sheet = document.getElementById('sheet');
 function showSheet(color, title, sub, body, meta, actions){
+  if (ride) return; // no cards while riding: the ride screen owns the bottom of the screen
   document.getElementById('shTitle').innerHTML = '<span class="dot" style="background:'+color+'"></span>' + esc(title);
   document.getElementById('shSub').textContent = sub || '';
   document.getElementById('shBody').textContent = body || '';
@@ -489,6 +524,7 @@ function banStyle(f){
 }
 const banHighlight = L.layerGroup();
 function highlightStreet(name, run){ // whole street faint, the run a report applies to bright
+  if (ride) return;
   banHighlight.clearLayers();
   DATA.banned.features.filter(f => f.properties.n === name).forEach(f => {
     const strong = f.properties.run === run;
@@ -796,7 +832,7 @@ document.getElementById('formSave').onclick = () => {
   if (saved && saved.type === 'sign' && saved.osmWay && !saved.geom && !markWay(saved)) attachWayGeom(saved);
 };
 // long press (contextmenu) on map => new mark there
-map.on('contextmenu', e => { openForm({lat:e.latlng.lat, lon:e.latlng.lng}); });
+map.on('contextmenu', e => { if (ride) return; openForm({lat:e.latlng.lat, lon:e.latlng.lng}); });
 // "+" button: crosshair mode, tap again to confirm at map centre
 const btnAdd = document.getElementById('btnAdd'), crosshair = document.getElementById('crosshair');
 let addMode = false;
@@ -894,7 +930,7 @@ map.on('dragstart', () => { if (follow) { follow = false; btnLocate.classList.re
 const VALHALLA = 'https://valhalla1.openstreetmap.de/route';
 const routePanel = document.getElementById('routePanel'), btnRoute = document.getElementById('btnRoute');
 const rp = {from:document.getElementById('rpFrom'), to:document.getElementById('rpTo'), status:document.getElementById('rpStatus'),
-            google:document.getElementById('rpGoogle'), yandex:document.getElementById('rpYandex')};
+            google:document.getElementById('rpGoogle'), yandex:document.getElementById('rpYandex'), ride:document.getElementById('rpRide')};
 let routeMode = false, rtA = null, rtB = null, rtLine = null, rtCasing = null, rtReq = 0;
 
 function routePinIcon(label, color){ return L.divIcon({className:'', html:'<div class="rt-pin" style="--c:'+color+'">'+label+'</div>', iconSize:[26,26], iconAnchor:[13,13]}); }
@@ -931,18 +967,38 @@ function signPolygons(){ // ~50 m boxes around "sign" marks so the router avoids
   return polys;
 }
 // toXY / nearestBanned / nearBanned (distance to red segments) are defined near the top of the script
+let lastRoute = null; // {trip, pts, dest} of the route shown in the panel; ride mode starts from it
+// one Valhalla request: motorcycle costing respects motorcycle=no, sign reports become exclude zones,
+// an optional heading (degrees) keeps a re-route from starting with a U-turn
+async function requestRoute(from, to, heading){
+  const start = {lat:from.lat, lon:from.lng};
+  if (heading != null) { start.heading = Math.round(heading); start.heading_tolerance = 60; }
+  const body = {locations:[start, {lat:to.lat, lon:to.lng}], costing:'motorcycle', units:'kilometers', language:'ru-RU'};
+  const polys = signPolygons(); if (polys.length) body.exclude_polygons = polys;
+  const res = await fetch(VALHALLA, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const trip = (await res.json()).trip;
+  return {trip, pts:decodeShape(trip.legs[0].shape)};
+}
+// hand-off links with via points so external navigators follow the same path
+function setHandoffLinks(a, b, trip, pts){
+  const mans = trip.legs[0].maneuvers, via = [];
+  const step = Math.max(1, Math.ceil((mans.length - 2) / 8));
+  for (let i = 1; i < mans.length - 1; i += step) { const p = pts[mans[i].begin_shape_index]; if (p) via.push(p); }
+  const f = p => p[0].toFixed(5) + ',' + p[1].toFixed(5);
+  rp.google.href = 'https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=' + f([a.lat, a.lng]) + '&destination=' + f([b.lat, b.lng]) + (via.length ? '&waypoints=' + via.map(f).join('|') : '');
+  rp.yandex.href = 'https://yandex.ru/maps/?rtt=auto&rtext=' + [[a.lat, a.lng], ...via, [b.lat, b.lng]].map(f).join('~');
+  rp.google.classList.remove('hidden'); rp.yandex.classList.remove('hidden');
+}
 async function buildRoute(){
   if (!rtA || !rtB) return;
   const a = rtA.getLatLng(), b = rtB.getLatLng(), my = ++rtReq;
-  rp.status.textContent = 'Строю маршрут…'; rp.google.classList.add('hidden'); rp.yandex.classList.add('hidden');
-  const body = {locations:[{lat:a.lat, lon:a.lng}, {lat:b.lat, lon:b.lng}], costing:'motorcycle', units:'kilometers', language:'ru-RU'};
-  const polys = signPolygons(); if (polys.length) body.exclude_polygons = polys;
+  rp.status.textContent = 'Строю маршрут…'; rp.google.classList.add('hidden'); rp.yandex.classList.add('hidden'); rp.ride.classList.add('hidden');
   try {
-    const res = await fetch(VALHALLA, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const {trip, pts} = await requestRoute(a, b);
     if (my !== rtReq) return;
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const trip = (await res.json()).trip;
-    const pts = decodeShape(trip.legs[0].shape);
+    lastRoute = {trip, pts, dest:b};
+    loadRuNames();
     if (rtLine) { map.removeLayer(rtLine); map.removeLayer(rtCasing); }
     rtCasing = L.polyline(pts, {color:'#fff', weight:9, opacity:0.9, interactive:false}).addTo(map);
     rtLine = L.polyline(pts, {color:'#2563eb', weight:5, opacity:0.95, interactive:false}).addTo(map);
@@ -959,14 +1015,8 @@ async function buildRoute(){
     const crossed = new Set(Object.keys(along).filter(n => along[n] > 60));
     const km = trip.summary.length.toFixed(1), min = Math.round(trip.summary.time / 60);
     rp.status.textContent = km + ' км · ~' + min + ' мин' + (crossed.size ? ' · ⚠️ возможно, идёт по запрету: ' + [...crossed].join(', ') : ' · запреты обойдены');
-    // hand-off links with via points so external navigators follow the same path
-    const mans = trip.legs[0].maneuvers, via = [];
-    const step = Math.max(1, Math.ceil((mans.length - 2) / 8));
-    for (let i = 1; i < mans.length - 1; i += step) { const p = pts[mans[i].begin_shape_index]; if (p) via.push(p); }
-    const f = p => p[0].toFixed(5) + ',' + p[1].toFixed(5);
-    rp.google.href = 'https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=' + f([a.lat, a.lng]) + '&destination=' + f([b.lat, b.lng]) + (via.length ? '&waypoints=' + via.map(f).join('|') : '');
-    rp.yandex.href = 'https://yandex.ru/maps/?rtt=auto&rtext=' + [[a.lat, a.lng], ...via, [b.lat, b.lng]].map(f).join('~');
-    rp.google.classList.remove('hidden'); rp.yandex.classList.remove('hidden');
+    setHandoffLinks(a, b, trip, pts);
+    rp.ride.classList.remove('hidden');
   } catch (e) {
     if (my !== rtReq) return;
     rp.status.textContent = 'Не удалось построить маршрут (' + e.message + '). Проверьте интернет или сдвиньте точки ближе к дороге.';
@@ -974,6 +1024,7 @@ async function buildRoute(){
 }
 function clearRoute(){
   [rtA, rtB, rtLine, rtCasing].forEach(l => l && map.removeLayer(l)); rtA = rtB = rtLine = rtCasing = null; rtReq++;
+  lastRoute = null; rp.ride.classList.add('hidden');
   rp.from.textContent = 'Откуда: нажмите на карту'; rp.to.textContent = 'Куда: нажмите на карту';
   rp.status.textContent = 'Точки можно перетаскивать.'; rp.google.classList.add('hidden'); rp.yandex.classList.add('hidden');
 }
@@ -991,6 +1042,285 @@ function routeTo(ll){
 }
 document.getElementById('routeClose').onclick = () => setRouteMode(false);
 document.getElementById('rpClear').onclick = clearRoute;
+
+/* ---------- ride mode: follow the route inside the map, Russian voice prompts, re-route when off course ---------- */
+const rideEls = {top:document.getElementById('rideTop'), arrow:document.getElementById('rideArrow'), dist:document.getElementById('rideDist'),
+  text:document.getElementById('rideText'), bottom:document.getElementById('rideBottom'), stats:document.getElementById('rideStats'),
+  voice:document.getElementById('rideVoice'), overview:document.getElementById('rideOverview'), recenter:document.getElementById('rideRecenter'),
+  stop:document.getElementById('rideStop')};
+let RU_NAMES = {}, ruNamesLoad = null;
+// Russian street names for prompts: a separate file (build_ru_names), fetched once and cached by the service worker
+function loadRuNames(){
+  return ruNamesLoad || (ruNamesLoad = fetch('ru-names.json').then(r => r.ok ? r.json() : {}).then(j => { RU_NAMES = j || {}; }).catch(() => { ruNamesLoad = null; }));
+}
+let routeSeq = 0, wakeLock = null, ruVoice = null, voiceOn = true, stopArmed = 0;
+try { voiceOn = localStorage.getItem('mapmot.voice') !== 'off'; } catch (e) {}
+
+function plural(n, one, few, many){ const a = n % 10, b = n % 100; return a === 1 && b !== 11 ? one : a >= 2 && a <= 4 && (b < 12 || b > 14) ? few : many; }
+function fmtDist(m){
+  if (m >= 1000) return (m / 1000).toFixed(m >= 10000 ? 0 : 1).replace('.', ',') + ' км';
+  return (m >= 100 ? Math.round(m / 50) * 50 : Math.max(0, Math.round(m / 10) * 10)) + ' м';
+}
+function spokenDist(m){
+  if (m >= 1000) { const km = Math.round(m / 100) / 10; return Number.isInteger(km) ? km + ' ' + plural(km, 'километр', 'километра', 'километров') : String(km).replace('.', ',') + ' километра'; }
+  return Math.max(50, Math.round(m / 50) * 50) + ' метров';
+}
+function lowerFirst(s){ return s ? s.charAt(0).toLowerCase() + s.slice(1) : s; }
+
+// voice prompts through the phone's speech synthesis
+function pickVoice(){ try { ruVoice = speechSynthesis.getVoices().find(v => /^ru([-_]|$)/i.test(v.lang)) || null; } catch (e) {} }
+if ('speechSynthesis' in window) { pickVoice(); speechSynthesis.addEventListener('voiceschanged', pickVoice); }
+function say(text, urgent){
+  if (!voiceOn || !text || !('speechSynthesis' in window)) return;
+  try {
+    if (urgent) speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text); u.lang = 'ru-RU'; if (ruVoice) u.voice = ruVoice; u.rate = 1.05;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+function syncVoiceBtn(){ rideEls.voice.textContent = voiceOn ? '🔊' : '🔇'; rideEls.voice.title = voiceOn ? 'Выключить голос' : 'Включить голос'; }
+
+// keep the screen on while riding
+async function keepAwake(on){
+  try {
+    if (on && 'wakeLock' in navigator && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); }
+    if (!on && wakeLock) { const w = wakeLock; wakeLock = null; await w.release(); }
+  } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (ride && !ride.arrived && document.visibilityState === 'visible') keepAwake(true); });
+
+// Valhalla maneuver type -> arrow
+const TURN_ANGLE = {9:45, 10:90, 11:135, 14:-135, 15:-90, 16:-45, 18:45, 19:-45, 20:45, 21:-45, 23:30, 24:-30, 37:30, 38:-30};
+function turnIcon(type){
+  const svg = inner => '<svg viewBox="0 0 48 48" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">' + inner + '</svg>';
+  if (type === 4 || type === 5 || type === 6) return svg('<path d="M14 44V6"/><path d="M16 8h20l-5 7 5 7H16z" fill="#fff" stroke-width="2"/>');
+  if (type === 26 || type === 27) return svg('<circle cx="24" cy="30" r="10"/><path d="M24 20V6M16 13l8-8 8 8"/>');
+  const uturn = '<path d="M30 44V20a8 8 0 0 0-16 0v10"/><path d="M8 24l6 7 6-7"/>';
+  if (type === 13) return svg(uturn);
+  if (type === 12) return svg('<g transform="translate(48 0) scale(-1 1)">' + uturn + '</g>');
+  return svg('<path d="M24 44V26"/><g transform="rotate(' + (TURN_ANGLE[type] || 0) + ' 24 26)"><path d="M24 26V9"/><path d="M15 18l9-9 9 9"/></g>');
+}
+
+// route model: planar coordinates, cumulative distance, maneuvers with their distance along the route
+function localizeManeuver(m){
+  const names = [].concat(m.street_names || [], m.begin_street_names || []);
+  const fix = s => {
+    if (!s) return s;
+    names.forEach(n => { if (RU_NAMES[n]) s = s.split(n).join(RU_NAMES[n]); });
+    // Valhalla ru-RU joins two phrases as "…улица., затем Поверните налево."
+    return s.replace(/\.,\s*/g, ', ').replace(/(,\s*затем\s+)(\S)/g, (all, lead, ch) => lead + ch.toLowerCase());
+  };
+  return Object.assign({}, m, {instruction:fix(m.instruction), verbal_transition_alert_instruction:fix(m.verbal_transition_alert_instruction),
+    verbal_pre_transition_instruction:fix(m.verbal_pre_transition_instruction), verbal_post_transition_instruction:fix(m.verbal_post_transition_instruction)});
+}
+function makeRideRoute(trip, pts){
+  const xy = pts.map(p => toXY(p[0], p[1])), cum = [0];
+  for (let i = 1; i < xy.length; i++) cum.push(cum[i-1] + Math.hypot(xy[i][0] - xy[i-1][0], xy[i][1] - xy[i-1][1]));
+  const mans = trip.legs[0].maneuvers.map(m => Object.assign(localizeManeuver(m), {at:cum[Math.min(m.begin_shape_index, cum.length - 1)]}));
+  return {id:++routeSeq, trip, pts, xy, cum, total:cum[cum.length - 1], mans};
+}
+function projectOnRoute(r, lat, lon, hint){
+  const [px, py] = toXY(lat, lon);
+  const scan = (from, to) => {
+    let best = null;
+    for (let i = Math.max(0, from); i < Math.min(r.pts.length - 1, to); i++) {
+      const a = r.xy[i], b = r.xy[i+1], dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx*dx + dy*dy;
+      const t = l2 ? Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / l2)) : 0;
+      const d = Math.hypot(a[0] + t*dx - px, a[1] + t*dy - py);
+      if (!best || d < best.d) best = {i, t, d};
+    }
+    return best;
+  };
+  let best = scan(hint - 5, hint + 400); // look around the last position first, so overlapping parts of a route don't swap
+  if (!best || best.d > 60) { const all = scan(0, r.pts.length); if (all && (!best || all.d < best.d)) best = all; }
+  if (best) best.s = r.cum[best.i] + best.t * (r.cum[best.i+1] - r.cum[best.i]);
+  return best;
+}
+function routePointAt(r, p){ const a = r.pts[p.i], b = r.pts[p.i+1]; return [a[0] + (b[0] - a[0]) * p.t, a[1] + (b[1] - a[1]) * p.t]; }
+function drawRideRoute(){
+  const r = ride.route, p = ride.proj, cur = p ? routePointAt(r, p) : r.pts[0], i = p ? p.i : 0;
+  const rest = [cur].concat(r.pts.slice(i + 1)), done = r.pts.slice(0, i + 1).concat([cur]);
+  if (!rtLine) {
+    rtCasing = L.polyline(rest, {color:'#fff', weight:9, opacity:0.9, interactive:false}).addTo(map);
+    rtLine = L.polyline(rest, {color:'#2563eb', weight:5, opacity:0.95, interactive:false}).addTo(map);
+  } else { rtCasing.setLatLngs(rest); rtLine.setLatLngs(rest); }
+  ride.passed.setLatLngs(done);
+}
+function routeBearing(){
+  const r = ride.route, i = ride.proj ? ride.proj.i : 0, a = r.xy[i], b = r.xy[Math.min(i + 1, r.xy.length - 1)];
+  return (Math.atan2(b[0] - a[0], b[1] - a[1]) * 180 / Math.PI + 360) % 360;
+}
+function updateRideMarker(ll){
+  if (!ride.marker) ride.marker = L.marker(ll, {icon:L.divIcon({className:'', iconSize:[30, 30], iconAnchor:[15, 15],
+    html:'<div class="ride-me"><svg viewBox="0 0 30 30"><path d="M15 2L26 27 15 21 4 27z" fill="#2563eb" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/></svg></div>'}),
+    interactive:false, zIndexOffset:2000}).addTo(map);
+  else ride.marker.setLatLng(ll);
+  const el = ride.marker.getElement(), me = el && el.firstChild;
+  if (me) me.style.transform = 'rotate(' + Math.round(ride.heading != null ? ride.heading : routeBearing()) + 'deg)';
+}
+function followRider(ll){ // keep the rider in the middle of the map area between the ride panels
+  const size = map.getSize(), shift = (rideEls.top.offsetHeight + size.y - rideEls.bottom.offsetHeight) / 2 - size.y / 2;
+  const z = ride && ride.zoomBack ? Math.max(map.getZoom(), 16) : map.getZoom();
+  const center = map.unproject(map.project(ll, z).subtract([0, shift]), z);
+  if (z !== map.getZoom()) {
+    map.setView(center, z, {animate:false});
+    if (map.getZoom() === z) ride.zoomBack = false; // ignored during a running zoom animation: retried on the next fix
+  } else {
+    if (ride) ride.zoomBack = false;
+    map.panTo(center, {animate:true, duration:0.5});
+  }
+}
+function renderRide(){
+  const r = ride.route;
+  if (ride.arrived) {
+    rideEls.arrow.innerHTML = turnIcon(4); rideEls.dist.textContent = 'Вы на месте'; rideEls.text.textContent = '';
+    rideEls.stats.textContent = 'Маршрут пройден'; rideEls.stop.textContent = 'Готово'; return;
+  }
+  const k = Math.min(ride.nextK, r.mans.length - 1), m = r.mans[k], d = Math.max(0, m.at - ride.s);
+  rideEls.arrow.innerHTML = turnIcon(m.type);
+  rideEls.dist.textContent = fmtDist(d);
+  rideEls.text.textContent = ride.rerouting ? 'Перестраиваю маршрут…' : !ride.fix ? 'Жду сигнал GPS…' : ride.off >= 2 ? 'Вы съехали с маршрута' : (m.instruction || '');
+  const cur = r.mans[k - 1] || m, stepLen = Math.max(1, m.at - cur.at);
+  let remT = cur === m ? 0 : (cur.time || 0) * Math.min(1, d / stepLen);
+  for (let j = k; j < r.mans.length; j++) remT += r.mans[j].time || 0;
+  const eta = new Date(Date.now() + remT * 1000);
+  rideEls.stats.innerHTML = fmtDist(Math.max(0, r.total - ride.s)) + ' · ' + Math.max(1, Math.round(remT / 60)) + ' мин' +
+    '<small>прибытие в ' + String(eta.getHours()).padStart(2, '0') + ':' + String(eta.getMinutes()).padStart(2, '0') + '</small>';
+}
+function announce(){
+  const r = ride.route, s = ride.s, sp = Math.max(ride.speed || 0, 5);
+  let k = r.mans.findIndex(m => m.at > s + 8);
+  if (k < 0) k = r.mans.length - 1;
+  if (k > ride.nextK) { // just passed a maneuver: on a long straight say how far to keep going
+    const prev = r.mans[k - 1];
+    if (prev && prev.verbal_post_transition_instruction && r.mans[k].at - s > 900) say(prev.verbal_post_transition_instruction);
+    ride.nextK = k;
+  }
+  k = ride.nextK;
+  const m = r.mans[k], d = m.at - s, key = r.id + ':' + k;
+  const alertAt = Math.min(500, Math.max(200, sp * 15)), preAt = Math.min(130, Math.max(50, sp * 5));
+  if (d <= preAt) {
+    if (!ride.spoken[key + 'p']) { ride.spoken[key + 'p'] = ride.spoken[key + 'a'] = true; say(m.verbal_pre_transition_instruction || m.instruction, true); }
+  } else if (d <= alertAt && !ride.spoken[key + 'a']) {
+    ride.spoken[key + 'a'] = true;
+    say('Через ' + spokenDist(d) + ' ' + lowerFirst(m.verbal_transition_alert_instruction || m.verbal_pre_transition_instruction || m.instruction));
+  }
+}
+function rideArrived(){
+  const r = ride.route, lastKey = r.id + ':' + (r.mans.length - 1) + 'p';
+  ride.arrived = true;
+  if (!ride.spoken[lastKey]) say(r.mans[r.mans.length - 1].verbal_pre_transition_instruction || 'Вы прибыли', true);
+  keepAwake(false);
+  renderRide();
+}
+async function rideReroute(ll){
+  const cur = ride;
+  cur.rerouting = true; cur.lastReroute = Date.now(); renderRide();
+  try {
+    const from = L.latLng(ll[0], ll[1]), {trip, pts} = await requestRoute(from, cur.dest, cur.heading);
+    if (ride !== cur) return;
+    Object.assign(cur, {route:makeRideRoute(trip, pts), proj:null, s:0, nextK:1, off:0, onRoute:false, rerouting:false});
+    lastRoute = {trip, pts, dest:cur.dest};
+    if (rtA) rtA.setLatLng(from);
+    setHandoffLinks(from, cur.dest, trip, pts);
+    drawRideRoute();
+    say('Маршрут перестроен. ' + (cur.route.mans[0].verbal_pre_transition_instruction || ''), true);
+  } catch (e) {
+    if (ride !== cur) return;
+    cur.rerouting = false;
+    toast('Не удалось перестроить маршрут, попробую снова');
+  }
+  renderRide();
+}
+function onRideFix(pos){
+  if (!ride) return;
+  const c = pos.coords, ll = [c.latitude, c.longitude], now = Date.now(), acc = c.accuracy || 0;
+  if (ride.fix) {
+    const [x1, y1] = toXY(ride.fix.ll[0], ride.fix.ll[1]), [x2, y2] = toXY(ll[0], ll[1]), moved = Math.hypot(x2 - x1, y2 - y1), dt = (now - ride.fix.t) / 1000;
+    ride.speed = typeof c.speed === 'number' && !isNaN(c.speed) ? c.speed : dt > 0 ? moved / dt : ride.speed;
+    if (moved > 4) ride.heading = (Math.atan2(x2 - x1, y2 - y1) * 180 / Math.PI + 360) % 360;
+  }
+  if (typeof c.heading === 'number' && !isNaN(c.heading) && (c.speed || 0) > 1.5) ride.heading = c.heading;
+  ride.fix = {ll, t:now, acc};
+  updateRideMarker(ll);
+  if (ride.follow) followRider(ll);
+  if (ride.arrived) return;
+  const r = ride.route, p = projectOnRoute(r, ll[0], ll[1], ride.proj ? ride.proj.i : 0);
+  const [dx, dy] = toXY(ride.dest.lat, ride.dest.lng), [ux, uy] = toXY(ll[0], ll[1]);
+  if (Math.hypot(dx - ux, dy - uy) < 30) { rideArrived(); return; }
+  if (p && p.d <= Math.max(40, acc * 1.2)) {
+    ride.off = 0; ride.onRoute = true; ride.proj = p; ride.s = p.s;
+    drawRideRoute(); announce();
+    if (r.total - ride.s < 20) { rideArrived(); return; }
+  } else if (acc <= 60) { // off the route: re-route after three fixes in a row, or at once if the ride starts far from it
+    ride.off++;
+    const farAtStart = !ride.onRoute && p && p.d > 80;
+    if ((ride.off >= 3 || farAtStart) && !ride.rerouting && now - ride.lastReroute > 12000) rideReroute(ll);
+  }
+  renderRide();
+}
+function onRideError(err){
+  if (!ride) return;
+  if (err.code === 1) { toast('Доступ к геолокации запрещён'); stopRide(); return; }
+  rideEls.text.textContent = 'Нет сигнала GPS, жду…';
+}
+async function startRide(){
+  if (ride) return;
+  if (!lastRoute || lastRoute.pts.length < 2) { toast('Сначала постройте маршрут'); return; }
+  if (!navigator.geolocation) { toast('Геолокация недоступна'); return; }
+  await loadRuNames(); // normally already loaded when the route was built
+  if (ride || !lastRoute) return;
+  stopLocate();
+  if (userMarker) { map.removeLayer(userMarker); map.removeLayer(accCircle); userMarker = accCircle = null; }
+  ride = {route:makeRideRoute(lastRoute.trip, lastRoute.pts), dest:lastRoute.dest, proj:null, s:0, nextK:1, spoken:{}, off:0, onRoute:false,
+          lastReroute:0, rerouting:false, follow:true, fix:null, heading:null, speed:0, arrived:false, marker:null, watch:null};
+  ride.passed = L.polyline([], {renderer, color:'#94a3b8', weight:5, opacity:0.9, interactive:false}).addTo(map);
+  sheet.classList.remove('show'); form.classList.remove('show'); document.getElementById('legend').classList.remove('show'); stopAddMode(); clearHighlight();
+  document.body.classList.add('riding'); rideEls.top.hidden = false; rideEls.bottom.hidden = false; rideEls.recenter.hidden = true;
+  rideEls.stop.textContent = 'Стоп'; syncVoiceBtn(); keepAwake(true);
+  drawRideRoute(); renderRide();
+  map.setView(ride.route.pts[0], Math.max(map.getZoom(), 17), {animate:false});
+  say('Поехали. ' + (ride.route.mans[0].verbal_pre_transition_instruction || ''), true);
+  ride.watch = navigator.geolocation.watchPosition(onRideFix, onRideError, {enableHighAccuracy:true, maximumAge:1000, timeout:20000});
+}
+function stopRide(){
+  if (!ride) return;
+  const cur = ride; ride = null;
+  if (cur.watch != null) navigator.geolocation.clearWatch(cur.watch);
+  [cur.marker, cur.passed].forEach(l => l && map.removeLayer(l));
+  keepAwake(false);
+  try { speechSynthesis.cancel(); } catch (e) {}
+  document.body.classList.remove('riding'); rideEls.top.hidden = true; rideEls.bottom.hidden = true;
+  if (cur.arrived) { clearRoute(); setRouteMode(false); }
+  else if (lastRoute && rtLine) {
+    rtLine.setLatLngs(lastRoute.pts); rtCasing.setLatLngs(lastRoute.pts);
+    rp.status.textContent = 'Поездка остановлена. Продолжить можно кнопкой «Поехали по карте».';
+  }
+}
+rp.ride.onclick = startRide;
+rideEls.stop.onclick = () => { // two taps, so a glove or a bump does not end the ride
+  if (!ride) return;
+  if (ride.arrived || Date.now() - stopArmed < 3000) { stopArmed = 0; stopRide(); return; }
+  stopArmed = Date.now(); rideEls.stop.textContent = 'Точно стоп?';
+  setTimeout(() => { if (ride && !ride.arrived) rideEls.stop.textContent = 'Стоп'; }, 3000);
+};
+rideEls.voice.onclick = () => {
+  voiceOn = !voiceOn;
+  try { localStorage.setItem('mapmot.voice', voiceOn ? 'on' : 'off'); } catch (e) {}
+  syncVoiceBtn();
+  if (voiceOn) say('Голос включён', true); else { try { speechSynthesis.cancel(); } catch (e) {} }
+};
+rideEls.overview.onclick = () => {
+  if (!ride) return;
+  ride.follow = false; rideEls.recenter.hidden = false;
+  map.fitBounds(L.latLngBounds(ride.route.pts), {paddingTopLeft:[30, rideEls.top.offsetHeight + 20], paddingBottomRight:[30, rideEls.bottom.offsetHeight + 20]});
+};
+rideEls.recenter.onclick = () => {
+  if (!ride) return;
+  ride.follow = true; ride.zoomBack = true; rideEls.recenter.hidden = true;
+  if (ride.fix) followRider(ride.fix.ll);
+};
+map.on('dragstart', () => { if (ride) { ride.follow = false; rideEls.recenter.hidden = false; } });
 document.getElementById('rpMyLoc').onclick = () => {
   if (userMarker) { setPoint('A', userMarker.getLatLng()); return; }
   if (!navigator.geolocation) { toast('Геолокация недоступна'); return; }
@@ -999,12 +1329,12 @@ document.getElementById('rpMyLoc').onclick = () => {
     () => { rp.status.textContent = 'Не удалось определить местоположение.'; }, {enableHighAccuracy:true, timeout:15000});
 };
 map.on('click', e => {
-  if (!routeMode) return;
+  if (!routeMode || ride) return;
   if (!rtA) setPoint('A', e.latlng); else if (!rtB) setPoint('B', e.latlng); else setPoint('B', e.latlng);
 });
 
 /* ---------- offline: service worker, tile prefetch, status ---------- */
-const APP_VERSION = '6492f0d2bf';
+const APP_VERSION = '0a1f8774c0';
 document.getElementById('buildVersion').textContent = APP_VERSION;
 function setOnline(){ document.body.classList.toggle('offline', !navigator.onLine); }
 window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); fillMissingStreets(); });
