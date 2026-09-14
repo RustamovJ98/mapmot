@@ -414,6 +414,8 @@ def main():
     build_ru_names()
     marks_path = ROOT / "data" / "marks.json"
     marks = json.loads(marks_path.read_text(encoding="utf-8")) if marks_path.exists() else []
+    # also published as a file: the page refreshes shared marks from it, the report bot updates it between builds
+    (DIST / "marks.json").write_text(json.dumps(marks, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     data = {"banned": banned, "entries": entries, "corridors": corridors, "hazards": hazards, "radars": radars, "pois": pois,
             "marks": marks, "osmDate": osm_date,
             "stats": {"banned": len(banned["features"]), "corridors": counts, "radars": len(radars["features"]),

@@ -1,0 +1,90 @@
+name: Sign reports
+
+# Sign reports from the app arrive as issues titled "[отметки] ..." with a JSON block (build/merge_reports.py).
+# The owner's own issues are merged at once; anyone else's after the owner adds the "approved" label.
+# The issue body is untrusted: it is passed to the script only through an environment variable.
+on:
+  issues:
+    types: [opened, labeled]
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sign-reports
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: startsWith(github.event.issue.title, '[отметки]') && github.event.issue.state == 'open'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      ISSUE_NUMBER: ${{ github.event.issue.number }}
+    steps:
+      - name: Decide
+        id: gate
+        env:
+          ACTION: ${{ github.event.action }}
+          AUTHOR: ${{ github.event.issue.user.login }}
+          OWNER: ${{ github.repository_owner }}
+          LABEL: ${{ github.event.label.name }}
+        run: |
+          if [ "$ACTION" = "opened" ] && [ "$AUTHOR" = "$OWNER" ]; then
+            echo "go=merge" >> "$GITHUB_OUTPUT"
+          elif [ "$ACTION" = "labeled" ] && [ "$LABEL" = "approved" ]; then
+            echo "go=merge" >> "$GITHUB_OUTPUT"
+          elif [ "$ACTION" = "opened" ]; then
+            echo "go=wait" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=skip" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ask the owner to approve reports from other people
+        if: steps.gate.outputs.go == 'wait'
+        run: |
+          gh label create approved --repo "$GITHUB_REPOSITORY" --color 2ea44f --description "Принять отметки о знаках в общую карту" || true
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Спасибо! Отметки попадут в общую карту после проверки: владелец карты добавит к заявке метку approved."
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == 'merge'
+
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == 'merge'
+        with:
+          python-version: "3.12"
+
+      - name: Merge reports into data/marks.json
+        id: merge
+        if: steps.gate.outputs.go == 'merge'
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+        run: python build/merge_reports.py
+
+      - name: Commit and push
+        if: steps.gate.outputs.go == 'merge' && steps.merge.outputs.added != '0'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/marks.json docs/marks.json
+          git commit -m "Sign reports from issue #$ISSUE_NUMBER"
+          for i in 1 2 3; do
+            if git pull --rebase && git push; then exit 0; fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Reply and close the issue
+        if: steps.gate.outputs.go == 'merge'
+        env:
+          SUMMARY: ${{ steps.merge.outputs.summary }}
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "$SUMMARY"
+          gh issue close "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY"
+
+      - name: Report a failure on the issue
+        if: failure() && steps.gate.outputs.go == 'merge'
+        run: gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Не получилось добавить отметки, подробности в журнале GitHub Actions."

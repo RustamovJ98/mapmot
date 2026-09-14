@@ -1,12 +1,12 @@
 /* MapMot service worker: offline app shell + on-demand tile cache. */
-const VERSION = '8d6a3aa453';
+const VERSION = '9365c318de';
 const SHELL = 'mapmot-shell-' + VERSION;
 const TILES = 'mapmot-tiles-v1';
 const PACK = 'mapmot-pack-v1'; // "whole Tashkent offline": filled by the page, never trimmed, survives app updates
 const TILE_HOSTS = ['tile.openstreetmap.org', 'tiles.openfreemap.org'];
 const MAX_TILES = 6000;
 const SHELL_URLS = ['./', './index.html', './vendor/leaflet.min.js', './vendor/leaflet.min.css',
-  './vendor/maplibre-gl.js', './vendor/maplibre-gl.css', './vendor/leaflet-maplibre-gl.js', './style/liberty-ru.json', './ru-names.json',
+  './vendor/maplibre-gl.js', './vendor/maplibre-gl.css', './vendor/leaflet-maplibre-gl.js', './style/liberty-ru.json', './ru-names.json', './marks.json',
   './manifest.webmanifest', './icons/moto.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-512-maskable.png'];
 
 self.addEventListener('install', e => {
@@ -31,15 +31,17 @@ self.addEventListener('fetch', e => {
 async function shellHandler(req, url) {
   const cache = await caches.open(SHELL);
   const isPage = req.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('/index.html');
-  if (isPage) {
+  const isMarks = url.pathname.endsWith('/marks.json'); // shared sign reports: the bot updates them between builds
+  if (isPage || isMarks) {
     // network first so updates arrive when online; cached page when offline.
     // cache: 'no-cache' revalidates with the server (ETag / Last-Modified) instead of trusting
     // the HTTP cache, so a fresh deploy shows up on the next open, not 10 minutes later
     try {
       const r = await fetch(req.url, {cache: 'no-cache', credentials: 'same-origin'});
-      if (r.ok) cache.put('./index.html', r.clone());
+      if (r.ok) cache.put(isMarks ? './marks.json' : './index.html', r.clone());
       return r;
     } catch (err) {
+      if (isMarks) return (await cache.match('./marks.json')) || new Response('[]', {headers: {'Content-Type': 'application/json'}});
       return (await cache.match('./index.html')) || (await cache.match('./')) || Response.error();
     }
   }

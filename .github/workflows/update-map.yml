@@ -42,4 +42,9 @@ jobs:
             exit 0
           fi
           git commit -m "Auto-update map data ($(date -u +%Y-%m-%d))"
-          git push
+          # sign reports may have been merged meanwhile (sign-reports.yml)
+          for i in 1 2 3; do
+            if git pull --rebase && git push; then exit 0; fi
+            sleep 10
+          done
+          exit 1

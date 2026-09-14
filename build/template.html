@@ -155,6 +155,15 @@
   .ride-btns .btn{padding:12px 6px;font-size:15px}
   .ride-me{width:30px;height:30px}
   .ride-me svg{width:30px;height:30px;display:block}
+  /* weather */
+  .title{flex-wrap:wrap}
+  .wx{border:none;background:#f3f4f6;border-radius:999px;padding:3px 9px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;color:var(--fg)}
+  .wx.warn{background:#fef3c7;color:#92400e}
+  .wx.stale{opacity:.6}
+  #shExtra{max-height:40vh;overflow:auto}
+  .wx-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  .wx-table td{padding:5px 3px;border-top:1px solid var(--line);white-space:nowrap}
+  .wx-table td.r{text-align:right}
   /* banned street extras */
   .ban-label{background:rgba(255,255,255,.85);color:#9f1239;font-size:11px;font-weight:700;padding:1px 5px;border-radius:6px;
     white-space:nowrap;border:1px solid #fda4af;transform:translate(-50%,-50%);width:max-content!important;pointer-events:none}
@@ -172,7 +181,7 @@
 <div id="map"></div>
 
 <div class="topbar">
-  <div class="title"><img src="icons/moto.svg" alt="" width="24" height="24" style="display:block"> <b>Мото-карта Ташкента</b><small id="osmdate"></small><span class="offline" id="offline">офлайн</span></div>
+  <div class="title"><img src="icons/moto.svg" alt="" width="24" height="24" style="display:block"> <b>Мото-карта Ташкента</b><button class="wx" id="wxChip" hidden title="Погода"></button><span class="offline" id="offline">офлайн</span></div>
   <div class="chips" id="chips">
     <button class="chip" data-layer="banned" style="--c:var(--red)"><span class="dot"></span>Запрет</button>
     <button class="chip" data-layer="corridors" style="--c:var(--green)"><span class="dot"></span>Коридоры</button>
@@ -203,6 +212,8 @@
   <div><span class="pt" style="background:#db2777"></span>Отметки: общие и ваши (пунктирная рамка)</div>
   <p>Карта не заменяет дорожные знаки. Данные OpenStreetMap, проверяйте на месте. В карточке запрета показано, кто и когда его отметил: по знакам, массовой правкой или давно. Радары и АЗС видны от 13-го зума, опасности от 14-го.</p>
   <p>Знак для мото: нажмите на красную улицу и выберите «Знак есть» или «Знака нет». Отметка действует на подсвеченный участок, повторное нажатие снимает её. Для улицы без запрета: долгое нажатие на карте, тип «Знак запрета мото».</p>
+  <div class="tools"><button class="btn primary" id="btnShare">📤 Знаки в общую карту</button></div>
+  <p>Кнопка открывает на GitHub заявку с вашими отметками о знаках. Подтвердите её создание, и бот сам добавит отметки в общую карту за пару минут. Нужен вход в GitHub.</p>
   <p>Своя отметка: долгое нажатие на карту или кнопка «＋». Хранятся в этом браузере.</p>
   <div class="tools">
     <button class="btn" id="btnExport">Экспорт отметок</button>
@@ -221,7 +232,7 @@
     <button class="btn" id="btnSaveArea">Сохранить район</button>
     <button class="btn" id="btnClearTiles">Очистить (<span id="tileCount">…</span>)</button>
   </div>
-  <p>Версия сборки: <span id="buildVersion"></span></p>
+  <p>Данные OSM от <span id="osmdate"></span>, версия сборки <span id="buildVersion"></span>. Погода от Open-Meteo: в запрос уходят координаты с точностью около 2 км.</p>
 </div>
 
 <div class="sheet" id="sheet">
@@ -229,6 +240,7 @@
   <h3 id="shTitle"></h3>
   <div class="sub" id="shSub"></div>
   <p id="shBody"></p>
+  <div id="shExtra"></div>
   <div class="meta" id="shMeta"></div>
   <div class="actions" id="shActions"></div>
 </div>
@@ -313,7 +325,7 @@ function setBasemap(mode){
   const b = document.getElementById('btnBasemap'); if (b) b.textContent = mode === 'vector' ? 'Подложка: векторная' : 'Подложка: растровая';
 }
 setBasemap(basemapMode);
-document.getElementById('osmdate').textContent = 'OSM ' + DATA.osmDate;
+document.getElementById('osmdate').textContent = fmtDate(DATA.osmDate);
 
 const renderer = L.canvas({padding:0.5, tolerance:14});
 
@@ -394,6 +406,7 @@ document.getElementById('legendSigns').innerHTML =
 const sheet = document.getElementById('sheet');
 function showSheet(color, title, sub, body, meta, actions){
   if (ride) return; // no cards while riding: the ride screen owns the bottom of the screen
+  document.getElementById('shExtra').innerHTML = '';
   document.getElementById('shTitle').innerHTML = '<span class="dot" style="background:'+color+'"></span>' + esc(title);
   document.getElementById('shSub').textContent = sub || '';
   document.getElementById('shBody').textContent = body || '';
@@ -496,23 +509,23 @@ function distanceText(lat, lon){
   const d = map.distance(userMarker.getLatLng(), [lat, lon]);
   return d < 1000 ? Math.round(d) + ' м от вас' : (d / 1000).toFixed(1) + ' км от вас';
 }
+function openPoi(f){
+  const p = f.properties;
+  const [lon, lat] = f.geometry.coordinates;
+  const sub = [poiKind[p.kind], p.brand, distanceText(lat, lon)].filter(Boolean).join(' · ');
+  const body = [p.sub, p.addr ? 'Адрес: ' + p.addr : '', p.hours ? 'Часы: ' + p.hours : ''].filter(Boolean).join('\n');
+  const meta = [];
+  if (p.phone) meta.push('<a href="tel:'+esc(p.phone)+'">'+esc(p.phone)+'</a>');
+  if (p.site) meta.push('<a href="'+esc(p.site)+'" target="_blank" rel="noopener">Сайт ↗</a>');
+  meta.push('<a href="https://www.google.com/maps/dir/?api=1&destination='+lat+','+lon+'" target="_blank" rel="noopener">Google Maps ↗</a>');
+  meta.push(osmLink(p.t, p.id));
+  showSheet(poiColor[p.kind], p.label, sub, body, meta.join(''), [
+    {label:'🧭 Маршрут сюда', cls:'primary', fn:() => routeTo(L.latLng(lat, lon))},
+  ]);
+}
 layers.pois = L.geoJSON(DATA.pois, {
   pointToLayer:(f, ll) => L.marker(ll, {icon:pinIcon(poiGlyph[f.properties.kind] || 'wrench', poiColor[f.properties.kind], f.properties.kind === 'moto')}),
-  onEachFeature:(f, l) => l.on('click', e => {
-    L.DomEvent.stopPropagation(e);
-    const p = f.properties;
-    const [lon, lat] = f.geometry.coordinates;
-    const sub = [poiKind[p.kind], p.brand, distanceText(lat, lon)].filter(Boolean).join(' · ');
-    const body = [p.sub, p.addr ? 'Адрес: ' + p.addr : '', p.hours ? 'Часы: ' + p.hours : ''].filter(Boolean).join('\n');
-    const meta = [];
-    if (p.phone) meta.push('<a href="tel:'+esc(p.phone)+'">'+esc(p.phone)+'</a>');
-    if (p.site) meta.push('<a href="'+esc(p.site)+'" target="_blank" rel="noopener">Сайт ↗</a>');
-    meta.push('<a href="https://www.google.com/maps/dir/?api=1&destination='+lat+','+lon+'" target="_blank" rel="noopener">Google Maps ↗</a>');
-    meta.push(osmLink(p.t, p.id));
-    showSheet(poiColor[p.kind], p.label, sub, body, meta.join(''), [
-      {label:'🧭 Маршрут сюда', cls:'primary', fn:() => routeTo(L.latLng(lat, lon))},
-    ]);
-  })
+  onEachFeature:(f, l) => l.on('click', e => { L.DomEvent.stopPropagation(e); openPoi(f); })
 });
 
 /* ---------- banned streets: confidence styling, highlight, entries, labels, list ---------- */
@@ -582,7 +595,7 @@ function reportSign(type, p, where){
   if (!state.marks) { state.marks = true; applyLayers(); }
   openBanned(p, where);
 }
-function marksChanged(){ renderMarks(); computeVerdicts(); bannedLines.setStyle(banStyle); }
+function marksChanged(){ renderMarks(); computeVerdicts(); bannedLines.setStyle(banStyle); updateShareBtn(); }
 const bannedLines = L.geoJSON(DATA.banned, {
   renderer, style:banStyle,
   onEachFeature:(f, l) => l.on('click', e => { L.DomEvent.stopPropagation(e); openBanned(f.properties, e.latlng); })
@@ -689,7 +702,8 @@ function renderMarks(){
       L.polyline(m.geom, {renderer, color:'#be123c', weight:6, opacity:0.9, dashArray:'1 11', lineCap:'round'}).on('click', open).addTo(layers.marks);
     L.marker([m.lat, m.lon], {icon:markIcon(m, mine), zIndexOffset:isSignReport(m) ? 600 : 0}).on('click', open).addTo(layers.marks);
   };
-  (DATA.marks || []).forEach(m => add(m, false));
+  const mineIds = new Set(myMarks.map(m => m.id)); // a shared copy of my own report is drawn once, as mine
+  (DATA.marks || []).forEach(m => { if (!mineIds.has(m.id)) add(m, false); });
   myMarks.forEach(m => add(m, true));
 }
 function openMark(m, mine){
@@ -730,7 +744,10 @@ function openMark(m, mine){
   }
   if (noteText && mine) meta.push('<a href="https://www.openstreetmap.org/note/new#map=19/' + m.lat + '/' + m.lon + '" target="_blank" rel="noopener" id="osmNote">Заметка в OSM ↗</a>');
   meta.push('<span>'+m.lat.toFixed(5)+', '+m.lon.toFixed(5)+'</span>');
-  showSheet(m.type === 'sign' ? '#d21f1f' : '#16a34a', t.icon + ' ' + t.label, [street || 'Улица не определена', mine ? 'моя отметка' : 'общая отметка'].join(' · '), lines.join('\n'), meta.join(''), actions);
+  const sharedIds = new Set((DATA.marks || []).map(x => x.id));
+  if (mine && !sharedIds.has(m.id)) actions.push({label:'📤 В общую карту', cls:'wide primary', fn:shareReports});
+  const who = mine ? (sharedIds.has(m.id) ? 'моя отметка, есть в общей карте' : 'моя отметка') : 'общая отметка' + (m.by ? ' от @' + m.by : '');
+  showSheet(m.type === 'sign' ? '#d21f1f' : '#16a34a', t.icon + ' ' + t.label, [street || 'Улица не определена', who].join(' · '), lines.join('\n'), meta.join(''), actions);
   if (f) highlightStreet(f.properties.n, f.properties.run);
   const note = document.getElementById('osmNote');
   if (note && noteText) note.addEventListener('click', () => {
@@ -877,6 +894,50 @@ document.getElementById('btnImport').onclick = () => {
 renderMarks();
 fillMissingStreets();
 
+/* ---------- sign reports into the shared map: a prefilled GitHub issue that the bot merges (.github/workflows/sign-reports.yml) ---------- */
+const REPO = 'RustamovJ98/mapmot';
+const SHARE_BATCH = 8; // keeps the prefilled GitHub URL short enough
+function unsharedReports(){ const ids = new Set((DATA.marks || []).map(m => m.id)); return myMarks.filter(m => isSignReport(m) && !ids.has(m.id)); }
+function updateShareBtn(){
+  const b = document.getElementById('btnShare'); if (!b) return;
+  const n = unsharedReports().length;
+  b.textContent = n ? '📤 Знаки в общую карту: ' + n : '✓ Ваши знаки уже в общей карте';
+}
+function shareUrl(batch){
+  const lines = batch.map(m => '- ' + (m.type === 'sign' ? '⛔ Знак есть' : '🟢 Знака нет') + ': ' + (m.street || m.lat + ', ' + m.lon) + ', ' + fmtDate(m.date));
+  const title = '[отметки] ' + batch.length + ' ' + plural(batch.length, 'отметка', 'отметки', 'отметок') + ' о знаках';
+  const body = 'Отметки о знаках для мотоциклов из приложения MapMot. Бот проверит их и добавит в общую карту.\n\n' + lines.join('\n') +
+    '\n\n<!-- mapmot-reports -->\n```json\n' + JSON.stringify(batch) + '\n```\n';
+  return 'https://github.com/' + REPO + '/issues/new?title=' + encodeURIComponent(title) + '&body=' + encodeURIComponent(body);
+}
+function shareReports(){
+  const list = unsharedReports();
+  if (!list.length) { toast('Все ваши отметки о знаках уже в общей карте'); return; }
+  const payload = list.map(m => {
+    const o = {id:m.id, type:m.type, lat:m.lat, lon:m.lon, date:m.date};
+    ['way', 'osmWay', 'street', 'ts'].forEach(k => { if (m[k] != null && m[k] !== '') o[k] = m[k]; });
+    if (m.text) o.text = String(m.text).slice(0, 120);
+    return o;
+  });
+  let n = Math.min(SHARE_BATCH, payload.length), url = shareUrl(payload.slice(0, n));
+  while (url.length > 7000 && n > 1) url = shareUrl(payload.slice(0, --n)); // GitHub rejects very long prefilled links
+  window.open(url, '_blank', 'noopener');
+  toast(list.length > n ? 'Отправляю ' + n + ', остальные ' + (list.length - n) + ' следующей заявкой' : 'Подтвердите создание заявки на GitHub');
+}
+// shared marks are also a separate file, so reports merged by the bot appear without waiting for a rebuild
+async function refreshSharedMarks(){
+  try {
+    const r = await fetch('marks.json', {cache:'no-cache'});
+    if (!r.ok) return;
+    const arr = await r.json();
+    if (!Array.isArray(arr) || JSON.stringify(arr) === JSON.stringify(DATA.marks || [])) return;
+    DATA.marks = arr; marksChanged();
+  } catch (e) {}
+}
+document.getElementById('btnShare').onclick = shareReports;
+updateShareBtn();
+refreshSharedMarks();
+
 /* ---------- chips / persistence ---------- */
 const order = ['corridors', 'hazards', 'radars', 'pois', 'banned', 'marks']; // banned drawn on top of lines, marks are DOM markers
 let state = {banned:true, corridors:true, hazards:false, radars:false, pois:false, marks:true};
@@ -1004,6 +1065,7 @@ async function buildRoute(){
     if (my !== rtReq) return;
     lastRoute = {trip, pts, dest:b};
     loadRuNames();
+    lastRoute.fuel = fuelAlong(routeGeom(pts)); showRouteFuel(lastRoute.fuel);
     if (rtLine) { map.removeLayer(rtLine); map.removeLayer(rtCasing); }
     rtCasing = L.polyline(pts, {color:'#fff', weight:9, opacity:0.9, interactive:false}).addTo(map);
     rtLine = L.polyline(pts, {color:'#2563eb', weight:5, opacity:0.95, interactive:false}).addTo(map);
@@ -1019,7 +1081,7 @@ async function buildRoute(){
     });
     const crossed = new Set(Object.keys(along).filter(n => along[n] > 60));
     const km = trip.summary.length.toFixed(1), min = Math.round(trip.summary.time / 60);
-    rp.status.textContent = km + ' км · ~' + min + ' мин' + (crossed.size ? ' · ⚠️ возможно, идёт по запрету: ' + [...crossed].join(', ') : ' · запреты обойдены');
+    rp.status.textContent = km + ' км · ~' + min + ' мин' + (crossed.size ? ' · ⚠️ возможно, идёт по запрету: ' + [...crossed].join(', ') : ' · запреты обойдены') + fuelSummary(lastRoute.fuel);
     setHandoffLinks(a, b, trip, pts);
     rp.ride.classList.remove('hidden');
   } catch (e) {
@@ -1029,7 +1091,7 @@ async function buildRoute(){
 }
 function clearRoute(){
   [rtA, rtB, rtLine, rtCasing].forEach(l => l && map.removeLayer(l)); rtA = rtB = rtLine = rtCasing = null; rtReq++;
-  lastRoute = null; rp.ride.classList.add('hidden');
+  lastRoute = null; rp.ride.classList.add('hidden'); routeFuel.clearLayers();
   rp.from.textContent = 'Откуда: нажмите на карту'; rp.to.textContent = 'Куда: нажмите на карту';
   rp.status.textContent = 'Точки можно перетаскивать.'; rp.google.classList.add('hidden'); rp.yandex.classList.add('hidden');
 }
@@ -1118,11 +1180,15 @@ function localizeManeuver(m){
   return Object.assign({}, m, {instruction:fix(m.instruction), verbal_transition_alert_instruction:fix(m.verbal_transition_alert_instruction),
     verbal_pre_transition_instruction:fix(m.verbal_pre_transition_instruction), verbal_post_transition_instruction:fix(m.verbal_post_transition_instruction)});
 }
-function makeRideRoute(trip, pts){
+function routeGeom(pts){ // planar points and cumulative distance along a route polyline
   const xy = pts.map(p => toXY(p[0], p[1])), cum = [0];
   for (let i = 1; i < xy.length; i++) cum.push(cum[i-1] + Math.hypot(xy[i][0] - xy[i-1][0], xy[i][1] - xy[i-1][1]));
-  const mans = trip.legs[0].maneuvers.map(m => Object.assign(localizeManeuver(m), {at:cum[Math.min(m.begin_shape_index, cum.length - 1)]}));
-  return {id:++routeSeq, trip, pts, xy, cum, total:cum[cum.length - 1], mans};
+  return {pts, xy, cum, total:cum[cum.length - 1]};
+}
+function makeRideRoute(trip, pts){
+  const g = routeGeom(pts);
+  const mans = trip.legs[0].maneuvers.map(m => Object.assign(localizeManeuver(m), {at:g.cum[Math.min(m.begin_shape_index, g.cum.length - 1)]}));
+  return Object.assign(g, {id:++routeSeq, trip, mans});
 }
 function projectOnRoute(r, lat, lon, hint){
   const [px, py] = toXY(lat, lon);
@@ -1189,8 +1255,10 @@ function renderRide(){
   let remT = cur === m ? 0 : (cur.time || 0) * Math.min(1, d / stepLen);
   for (let j = k; j < r.mans.length; j++) remT += r.mans[j].time || 0;
   const eta = new Date(Date.now() + remT * 1000);
+  const nextFuel = (ride.fuel || []).find(st => st.s > ride.s + 30), warn = wxWarnings()[0];
   rideEls.stats.innerHTML = fmtDist(Math.max(0, r.total - ride.s)) + ' · ' + Math.max(1, Math.round(remT / 60)) + ' мин' +
-    '<small>прибытие в ' + String(eta.getHours()).padStart(2, '0') + ':' + String(eta.getMinutes()).padStart(2, '0') + '</small>';
+    '<small>прибытие в ' + String(eta.getHours()).padStart(2, '0') + ':' + String(eta.getMinutes()).padStart(2, '0') +
+    (nextFuel ? ' · ⛽ через ' + fmtDist(nextFuel.s - ride.s) : '') + (warn ? ' · ' + warn.icon + ' ' + esc(warn.text) : '') + '</small>';
 }
 function announce(){
   const r = ride.route, s = ride.s, sp = Math.max(ride.speed || 0, 5);
@@ -1225,7 +1293,8 @@ async function rideReroute(ll){
     const from = L.latLng(ll[0], ll[1]), {trip, pts} = await requestRoute(from, cur.dest, cur.heading);
     if (ride !== cur) return;
     Object.assign(cur, {route:makeRideRoute(trip, pts), proj:null, s:0, nextK:1, off:0, onRoute:false, rerouting:false});
-    lastRoute = {trip, pts, dest:cur.dest};
+    lastRoute = {trip, pts, dest:cur.dest, fuel:fuelAlong(cur.route)};
+    cur.fuel = lastRoute.fuel; showRouteFuel(cur.fuel);
     if (rtA) rtA.setLatLng(from);
     setHandoffLinks(from, cur.dest, trip, pts);
     drawRideRoute();
@@ -1279,6 +1348,7 @@ async function startRide(){
   if (userMarker) { map.removeLayer(userMarker); map.removeLayer(accCircle); userMarker = accCircle = null; }
   ride = {route:makeRideRoute(lastRoute.trip, lastRoute.pts), dest:lastRoute.dest, proj:null, s:0, nextK:1, spoken:{}, off:0, onRoute:false,
           lastReroute:0, rerouting:false, follow:true, fix:null, heading:null, speed:0, arrived:false, marker:null, watch:null};
+  ride.fuel = lastRoute.fuel || fuelAlong(ride.route);
   ride.passed = L.polyline([], {renderer, color:'#94a3b8', weight:5, opacity:0.9, interactive:false}).addTo(map);
   sheet.classList.remove('show'); form.classList.remove('show'); document.getElementById('legend').classList.remove('show'); stopAddMode(); clearHighlight();
   document.body.classList.add('riding'); rideEls.top.hidden = false; rideEls.bottom.hidden = false; rideEls.recenter.hidden = true;
@@ -1326,6 +1396,114 @@ rideEls.recenter.onclick = () => {
   if (ride.fix) followRider(ride.fix.ll);
 };
 map.on('dragstart', () => { if (ride) { ride.follow = false; rideEls.recenter.hidden = false; } });
+
+/* ---------- fuel along the route: petrol stations within 250 m of the line ---------- */
+const FUEL_CORRIDOR = 250;
+const routeFuel = L.layerGroup();
+function fuelAlong(r){
+  const out = [];
+  DATA.pois.features.forEach(f => {
+    const kind = f.properties.kind;
+    if (kind !== 'petrol' && kind !== 'fuel_unknown') return;
+    const [lon, lat] = f.geometry.coordinates, p = projectOnRoute(r, lat, lon, 0);
+    if (p && p.d <= FUEL_CORRIDOR) out.push({f, s:p.s, d:p.d, petrol:kind === 'petrol'});
+  });
+  return out.sort((a, b) => a.s - b.s);
+}
+function showRouteFuel(list){
+  routeFuel.clearLayers();
+  (list || []).forEach(st => {
+    const [lon, lat] = st.f.geometry.coordinates;
+    L.marker([lat, lon], {icon:pinIcon('fuel', st.petrol ? '#2563eb' : '#93c5fd', true), zIndexOffset:700})
+      .on('click', e => { L.DomEvent.stopPropagation(e); openPoi(st.f); }).addTo(routeFuel);
+  });
+  if (!map.hasLayer(routeFuel)) routeFuel.addTo(map);
+}
+function fuelSummary(list){
+  if (!list || !list.length) return ' · ⛽ АЗС на пути нет';
+  const petrol = list.filter(st => st.petrol).length, unknown = list.length - petrol;
+  const kind = !unknown ? '' : !petrol ? ', вид топлива не указан' : ', с бензином ' + petrol;
+  return ' · ⛽ АЗС на пути: ' + list.length + kind + ', первая через ' + fmtDist(list[0].s);
+}
+
+/* ---------- weather for the ride (Open-Meteo, no key; coordinates rounded to about 2 km) ---------- */
+const WX_CODES = {0:['Ясно','☀️','🌙'], 1:['Преимущественно ясно','🌤','🌙'], 2:['Переменная облачность','⛅','☁️'], 3:['Пасмурно','☁️'],
+  45:['Туман','🌫'], 48:['Туман с изморозью','🌫'], 51:['Слабая морось','🌦'], 53:['Морось','🌦'], 55:['Сильная морось','🌧'],
+  56:['Ледяная морось','🌧'], 57:['Ледяная морось','🌧'], 61:['Небольшой дождь','🌦'], 63:['Дождь','🌧'], 65:['Сильный дождь','🌧'],
+  66:['Ледяной дождь','🌧'], 67:['Ледяной дождь','🌧'], 71:['Небольшой снег','🌨'], 73:['Снег','🌨'], 75:['Сильный снег','❄️'],
+  77:['Снежная крупа','🌨'], 80:['Ливень','🌦'], 81:['Ливень','🌧'], 82:['Сильный ливень','🌧'], 85:['Снегопад','🌨'],
+  86:['Сильный снегопад','❄️'], 95:['Гроза','⛈'], 96:['Гроза с градом','⛈'], 99:['Гроза с градом','⛈']};
+let wx = null, wxLoading = false;
+try { wx = JSON.parse(localStorage.getItem('mapmot.wx') || 'null'); } catch (e) {}
+function wxIcon(code, isDay){ const w = WX_CODES[code] || ['', '🌡']; return isDay === 0 && w[2] ? w[2] : w[1]; }
+function wxText(code){ return (WX_CODES[code] || ['Погода'])[0]; }
+function wxStart(){ // first hourly slot not in the past: the stored forecast can be a few hours old
+  if (!wx || !wx.hourly) return 0;
+  const now = new Date(Date.now() + (wx.offset || 0) * 1000).toISOString().slice(0, 13);
+  const i = wx.hourly.time.findIndex(t => t.slice(0, 13) >= now);
+  return i < 0 ? wx.hourly.time.length : i;
+}
+function wxWarnings(){ // only what matters on a motorcycle: rain soon, strong gusts, heat, ice
+  if (!wx || !wx.hourly || Date.now() - wx.at > 6 * 3600000) return [];
+  const h = wx.hourly, s = wxStart(), e = Math.min(h.time.length, s + 6), out = [];
+  for (let i = s; i < e; i++) {
+    if ((h.precipitation_probability[i] || 0) >= 50 || (h.precipitation[i] || 0) >= 0.5) { out.push({icon:'🌧', text:i === s ? 'дождь в ближайший час' : 'дождь около ' + h.time[i].slice(11, 16)}); break; }
+  }
+  let gust = 0; for (let i = s; i < e; i++) gust = Math.max(gust, h.wind_gusts_10m[i] || 0);
+  if (gust >= 12) out.push({icon:'💨', text:'порывы ветра до ' + Math.round(gust) + ' м/с'});
+  const t = wx.current ? wx.current.temperature_2m : null;
+  if (t != null && t >= 38) out.push({icon:'🥵', text:'жара ' + Math.round(t) + '°'});
+  if (t != null && t <= 2 && out.some(w => w.icon === '🌧')) out.push({icon:'🧊', text:'риск гололёда'});
+  return out;
+}
+function renderWeather(){
+  const chip = document.getElementById('wxChip');
+  if (!wx || !wx.current) { chip.hidden = true; return; }
+  const c = wx.current, warns = wxWarnings();
+  chip.hidden = false;
+  chip.classList.toggle('warn', warns.length > 0);
+  chip.classList.toggle('stale', Date.now() - wx.at > 3 * 3600000);
+  chip.textContent = (warns.length ? warns[0].icon : wxIcon(c.weather_code, c.is_day)) + ' ' + Math.round(c.temperature_2m) + '°' +
+    (c.wind_speed_10m >= 8 ? ' · 💨 ' + Math.round(c.wind_speed_10m) : '');
+}
+async function refreshWeather(force){
+  renderWeather();
+  if (wxLoading || !navigator.onLine || (!force && wx && Date.now() - wx.at < 30 * 60000)) return;
+  wxLoading = true;
+  const ll = ride && ride.fix ? L.latLng(ride.fix.ll[0], ride.fix.ll[1]) : userMarker ? userMarker.getLatLng() : map.getCenter();
+  const lat = (Math.round(ll.lat * 50) / 50).toFixed(2), lon = (Math.round(ll.lng * 50) / 50).toFixed(2);
+  const fields = 'temperature_2m,weather_code,wind_speed_10m,wind_gusts_10m,is_day';
+  try {
+    const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
+      '&current=' + fields + ',apparent_temperature,precipitation&hourly=' + fields + ',precipitation_probability,precipitation' +
+      '&forecast_hours=12&wind_speed_unit=ms&timezone=auto');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    wx = {at:Date.now(), offset:j.utc_offset_seconds || 0, current:j.current, hourly:j.hourly};
+    try { localStorage.setItem('mapmot.wx', JSON.stringify(wx)); } catch (e) {}
+  } catch (e) {}
+  wxLoading = false;
+  renderWeather();
+}
+function openWeather(){
+  if (!wx || !wx.current) { toast('Погода загружается…'); refreshWeather(true); return; }
+  const c = wx.current, warns = wxWarnings(), h = wx.hourly, s = wxStart(), upd = new Date(wx.at);
+  const body = wxText(c.weather_code) + ', ' + Math.round(c.temperature_2m) + '°, ощущается как ' + Math.round(c.apparent_temperature) + '°.\n' +
+    'Ветер ' + Math.round(c.wind_speed_10m) + ' м/с, порывы до ' + Math.round(c.wind_gusts_10m) + ' м/с.' +
+    (warns.length ? '\n' + warns.map(w => w.icon + ' ' + w.text.charAt(0).toUpperCase() + w.text.slice(1)).join('\n') : '');
+  showSheet('#0ea5e9', wxIcon(c.weather_code, c.is_day) + ' Погода для поездки',
+    'обновлено в ' + String(upd.getHours()).padStart(2, '0') + ':' + String(upd.getMinutes()).padStart(2, '0') + ' · Open-Meteo', body, '',
+    [{label:'Обновить', fn:() => refreshWeather(true).then(openWeather)}]);
+  let rows = '';
+  for (let i = s; i < h.time.length; i++) {
+    rows += '<tr><td>' + esc(h.time[i].slice(11, 16)) + '</td><td>' + wxIcon(h.weather_code[i], h.is_day[i]) + '</td><td class="r">' + Math.round(h.temperature_2m[i]) +
+      '°</td><td class="r">💧 ' + (Number(h.precipitation_probability[i]) || 0) + '%</td><td class="r">💨 ' + Math.round(h.wind_speed_10m[i]) + '–' + Math.round(h.wind_gusts_10m[i]) + ' м/с</td></tr>';
+  }
+  document.getElementById('shExtra').innerHTML = rows ? '<table class="wx-table">' + rows + '</table>' : '<p>Прогноз устарел, нажмите «Обновить».</p>';
+}
+document.getElementById('wxChip').onclick = openWeather;
+refreshWeather();
+setInterval(() => refreshWeather(), 10 * 60000);
 document.getElementById('rpMyLoc').onclick = () => {
   if (userMarker) { setPoint('A', userMarker.getLatLng()); return; }
   if (!navigator.geolocation) { toast('Геолокация недоступна'); return; }
@@ -1342,7 +1520,7 @@ map.on('click', e => {
 const APP_VERSION = '__VERSION__';
 document.getElementById('buildVersion').textContent = APP_VERSION;
 function setOnline(){ document.body.classList.toggle('offline', !navigator.onLine); }
-window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); fillMissingStreets(); });
+window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); fillMissingStreets(); refreshSharedMarks(); refreshWeather(); });
 window.addEventListener('offline', () => { setOnline(); toast('Нет связи: работаю офлайн'); });
 setOnline();
 
