@@ -1004,7 +1004,7 @@ map.on('click', e => {
 });
 
 /* ---------- offline: service worker, tile prefetch, status ---------- */
-const APP_VERSION = '4f8b7b9854';
+const APP_VERSION = '6492f0d2bf';
 document.getElementById('buildVersion').textContent = APP_VERSION;
 function setOnline(){ document.body.classList.toggle('offline', !navigator.onLine); }
 window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); fillMissingStreets(); });
@@ -1026,15 +1026,18 @@ async function refreshTileCount(){
   document.getElementById('tileCount').textContent = r ? r.count + ' тайлов' : '—';
 }
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').then(reg => {
+  // the build version in the script URL makes a freshly loaded page install its matching worker right away,
+  // instead of waiting for the HTTP cache of sw.js (max-age=600 on GitHub Pages) to expire
+  navigator.serviceWorker.register('sw.js?v=' + APP_VERSION).then(reg => {
     swReg = reg;
-    reg.addEventListener('updatefound', () => {
-      const nw = reg.installing;
-      nw && nw.addEventListener('statechange', () => { if (nw.state === 'installed' && navigator.serviceWorker.controller) document.getElementById('updateBar').classList.add('show'); });
-    });
     if (navigator.serviceWorker.controller) refreshTileCount();
   }).catch(() => {});
-  navigator.serviceWorker.addEventListener('controllerchange', refreshTileCount);
+  navigator.serviceWorker.addEventListener('controllerchange', async () => {
+    refreshTileCount();
+    // a newer worker took over: offer a reload only if it belongs to another deploy than this open page
+    const r = await swMessage({type:'version'});
+    if (r && r.version && r.version !== APP_VERSION) document.getElementById('updateBar').classList.add('show');
+  });
 }
 
 // tile prefetch for the current view, current zoom .. +2 (capped)

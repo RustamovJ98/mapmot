@@ -1,5 +1,5 @@
 /* MapMot service worker: offline app shell + on-demand tile cache. */
-const VERSION = '4f8b7b9854';
+const VERSION = '6492f0d2bf';
 const SHELL = 'mapmot-shell-' + VERSION;
 const TILES = 'mapmot-tiles-v1';
 const TILE_HOSTS = ['tile.openstreetmap.org', 'tiles.openfreemap.org'];
@@ -9,7 +9,9 @@ const SHELL_URLS = ['./', './index.html', './vendor/leaflet.min.js', './vendor/l
   './manifest.webmanifest', './icons/moto.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-512-maskable.png'];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(SHELL).then(c => c.addAll(SHELL_URLS)).then(() => self.skipWaiting()));
+  // cache: 'reload' bypasses the browser HTTP cache (GitHub Pages sends max-age=600);
+  // without it a new version could store the previous deploy's files
+  e.waitUntil(caches.open(SHELL).then(c => c.addAll(SHELL_URLS.map(u => new Request(u, {cache: 'reload'})))).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', e => {
@@ -29,9 +31,11 @@ async function shellHandler(req, url) {
   const cache = await caches.open(SHELL);
   const isPage = req.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('/index.html');
   if (isPage) {
-    // network first so updates arrive when online; cached page when offline
+    // network first so updates arrive when online; cached page when offline.
+    // cache: 'no-cache' revalidates with the server (ETag / Last-Modified) instead of trusting
+    // the HTTP cache, so a fresh deploy shows up on the next open, not 10 minutes later
     try {
-      const r = await fetch(req);
+      const r = await fetch(req.url, {cache: 'no-cache', credentials: 'same-origin'});
       if (r.ok) cache.put('./index.html', r.clone());
       return r;
     } catch (err) {
