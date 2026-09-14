@@ -125,6 +125,17 @@
   .pin.mini svg{width:11px;height:11px}
   .pin.big{width:28px;height:28px}
   .pin.big svg{width:18px;height:18px}
+  /* sign report pins (mini road signs) */
+  .spin{width:30px;height:30px;border-radius:50%;box-shadow:0 1px 5px rgba(0,0,0,.45)}
+  .spin svg{width:30px;height:30px;display:block}
+  .spin.mine{outline:2px dashed #db2777;outline-offset:2px}
+  .legend .spin.mini{width:18px;height:18px;flex:none;display:block;margin:0;box-shadow:0 0 0 1px rgba(0,0,0,.2)}
+  .legend .spin.mini svg{width:18px;height:18px}
+  .legend #legendSigns{display:block;margin:0}
+  .sheet .actions{flex-wrap:wrap}
+  .sheet .actions .btn.wide{flex-basis:100%}
+  .btn.on{background:#111;color:#fff}
+  #formStreet{margin:0 0 8px}
   /* banned street extras */
   .ban-label{background:rgba(255,255,255,.85);color:#9f1239;font-size:11px;font-weight:700;padding:1px 5px;border-radius:6px;
     white-space:nowrap;border:1px solid #fda4af;transform:translate(-50%,-50%);width:max-content!important;pointer-events:none}
@@ -165,12 +176,14 @@
   <div><span class="ln" style="background:var(--red)"></span>Запрет, отмечен по знакам или дорога закрыта</div>
   <div><span class="ln" style="background:repeating-linear-gradient(90deg,var(--red) 0 8px,transparent 8px 13px)"></span>Запрет, не подтверждён: массовая правка или старые данные</div>
   <div><span class="pt" style="background:#fff;border-color:var(--red)"></span>Въезд в зону запрета (от 16-го зума)</div>
+  <div id="legendSigns"></div>
   <div class="tools"><button class="btn" id="btnBanList">Список запретов</button></div>
   <div><span class="ln" style="background:var(--green)"></span>Удобные коридоры (неофициально)</div>
   <div><span class="ln" style="background:var(--orange)"></span>Плохое покрытие</div>
   <div id="legendPts"></div>
   <div><span class="pt" style="background:#db2777"></span>Отметки: общие и ваши (пунктирная рамка)</div>
   <p>Карта не заменяет дорожные знаки. Данные OpenStreetMap, проверяйте на месте. В карточке запрета показано, кто и когда его отметил: по знакам, массовой правкой или давно. Радары и АЗС видны от 13-го зума, опасности от 14-го.</p>
+  <p>Знак для мото: нажмите на красную улицу и выберите «Знак есть» или «Знака нет». Отметка действует на подсвеченный участок, повторное нажатие снимает её. Для улицы без запрета: долгое нажатие на карте, тип «Знак запрета мото».</p>
   <p>Своя отметка: долгое нажатие на карту или кнопка «＋». Хранятся в этом браузере.</p>
   <div class="tools">
     <button class="btn" id="btnExport">Экспорт отметок</button>
@@ -199,7 +212,7 @@
 <div class="sheet form" id="listPanel">
   <button class="close" id="listClose">×</button>
   <h3>⛔ Запретные улицы</h3>
-  <div class="sub">Нажмите, чтобы показать улицу на карте. ✅ по знакам, ⚠️ массовая правка, ⏳ старые данные, 🚫 закрыта для всех</div>
+  <div class="sub">Нажмите, чтобы показать улицу на карте. ✅ по знакам, ⚠️ массовая правка, ⏳ старые данные, 🚫 закрыта для всех. Отметки: ⛔ знак есть, 🟢 знака нет</div>
   <div class="list" id="banList"></div>
 </div>
 
@@ -220,6 +233,7 @@
   <button class="close" id="formClose">×</button>
   <h3 id="formTitle">Новая отметка</h3>
   <div class="types" id="types"></div>
+  <div class="sub" id="formStreet" hidden></div>
   <textarea id="formText" placeholder="Комментарий: что здесь, когда видели…"></textarea>
   <div class="row">
     <button class="btn" id="formCancel">Отмена</button>
@@ -264,6 +278,78 @@ setBasemap(basemapMode);
 document.getElementById('osmdate').textContent = 'OSM ' + DATA.osmDate;
 
 const renderer = L.canvas({padding:0.5, tolerance:14});
+
+/* ---------- personal marks storage (loaded early: red street styling depends on sign reports) ---------- */
+let myMarks = [];
+try { const saved = JSON.parse(localStorage.getItem('mapmot.marks') || '[]'); if (Array.isArray(saved)) myMarks = saved; } catch (e) {}
+function saveMarks(){ try { localStorage.setItem('mapmot.marks', JSON.stringify(myMarks)); } catch (e) { toast('Не удалось сохранить'); } }
+function today(){ const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function fmtDate(d){ return d && d.length >= 10 ? d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0, 4) : (d || ''); }
+function fmtLen(m){ return m < 1000 ? Math.round(m) + ' м' : (m / 1000).toFixed(1).replace('.', ',') + ' км'; }
+
+/* ---------- distance from a point to red segments ---------- */
+const R = 6371000, cosLat = Math.cos(41.31 * Math.PI / 180);
+function toXY(lat, lon){ return [lon * Math.PI / 180 * R * cosLat, lat * Math.PI / 180 * R]; }
+const bannedSegs = [];
+DATA.banned.features.forEach(f => { const c = f.geometry.coordinates; for (let i = 1; i < c.length; i++) bannedSegs.push([toXY(c[i-1][1], c[i-1][0]), toXY(c[i][1], c[i][0]), f.properties.n, f]); });
+function nearestBanned(pt, maxDist){
+  const [px, py] = toXY(pt[0], pt[1]);
+  let best = null;
+  for (const [a, b, name, feat] of bannedSegs) {
+    if (Math.abs(a[0] - px) > maxDist + 300 && Math.abs(b[0] - px) > maxDist + 300) continue;
+    const dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx*dx + dy*dy;
+    let t = len2 ? ((px - a[0]) * dx + (py - a[1]) * dy) / len2 : 0; t = Math.max(0, Math.min(1, t));
+    const ex = a[0] + t*dx - px, ey = a[1] + t*dy - py, d2 = ex*ex + ey*ey;
+    if (d2 < maxDist * maxDist && (!best || d2 < best.d2)) best = {name, d2, feat};
+  }
+  return best ? {name:best.name, dist:Math.sqrt(best.d2), feat:best.feat} : null;
+}
+function nearBanned(pt){ const n = nearestBanned(pt, 12); return n ? n.name : null; }
+
+/* ---------- sign reports: contiguous runs of a red street + latest "sign / no sign" verdict per run ---------- */
+const WAY_FEAT = new Map(), RUN_FEATS = {};
+DATA.banned.features.forEach(f => { WAY_FEAT.set(f.properties.id, f); (RUN_FEATS[f.properties.run] = RUN_FEATS[f.properties.run] || []).push(f); });
+const isSignReport = m => m.type === 'sign' || m.type === 'nosign';
+function markWay(m){ // red way a sign report belongs to: the stored id, else the nearest red segment within 35 m
+  if (m.way && WAY_FEAT.has(m.way)) return m.way;
+  const n = nearestBanned([m.lat, m.lon], 35);
+  return n ? n.feat.properties.id : null;
+}
+let VERDICTS = {};
+function computeVerdicts(){
+  const v = {};
+  const consider = (m, mine) => {
+    if (!isSignReport(m)) return;
+    const way = markWay(m); if (!way) return;
+    const run = WAY_FEAT.get(way).properties.run;
+    const t = (m.ts || Date.parse(m.date || '') || 0) + (mine ? 1 : 0);
+    if (!v[run] || t >= v[run].t) v[run] = {type:m.type, mark:m, mine, t};
+  };
+  (DATA.marks || []).forEach(m => consider(m, false));
+  myMarks.forEach(m => consider(m, true));
+  VERDICTS = v;
+}
+computeVerdicts();
+function runInfo(run){
+  const fs = RUN_FEATS[run] || []; let len = 0;
+  fs.forEach(f => { const c = f.geometry.coordinates; for (let i = 1; i < c.length; i++) len += map.distance([c[i-1][1], c[i-1][0]], [c[i][1], c[i][0]]); });
+  return {segs:fs.length, len};
+}
+// mini road-sign pins, same drawing as the app logo
+const MOTO_G = '<g transform="translate(256 292) scale(0.6) translate(-256 -300)">' +
+  '<g fill="none" stroke="#111" stroke-width="42" stroke-linecap="round" stroke-linejoin="round"><circle cx="120" cy="352" r="66"/><circle cx="392" cy="352" r="66"/><path d="M120 352 L212 268"/><path d="M392 352 L336 222"/></g>' +
+  '<path d="M170 262 L206 200 L312 200 L340 186 L366 236 L346 272 L312 300 L212 300 Z" fill="#111"/>' +
+  '<path d="M212 158 L172 246" stroke="#111" stroke-width="52" stroke-linecap="round"/><circle cx="226" cy="116" r="42" fill="#111"/></g>';
+const SIGN_SVG = {
+  sign:   '<svg viewBox="0 0 512 512"><circle cx="256" cy="256" r="240" fill="#fff"/><circle cx="256" cy="256" r="208" fill="none" stroke="#d21f1f" stroke-width="60"/>' + MOTO_G + '<path d="M108 108 L404 404" stroke="#d21f1f" stroke-width="60"/></svg>',
+  nosign: '<svg viewBox="0 0 512 512"><circle cx="256" cy="256" r="240" fill="#fff"/><circle cx="256" cy="256" r="208" fill="none" stroke="#16a34a" stroke-width="60"/>' + MOTO_G + '</svg>',
+};
+function signPinHtml(type, mine){ return '<div class="spin' + (mine ? ' mine' : '') + '">' + SIGN_SVG[type] + '</div>'; }
+document.getElementById('legendSigns').innerHTML =
+  '<div><div class="spin mini">' + SIGN_SVG.sign + '</div>Знак запрета мото, по отметке</div>' +
+  '<div><div class="spin mini">' + SIGN_SVG.nosign + '</div>Знака нет, по отметке</div>' +
+  '<div><span class="ln" style="background:repeating-linear-gradient(90deg,#64748b 0 4px,transparent 4px 9px)"></span>Запрет в OSM, но по отметке знака нет</div>' +
+  '<div><span class="ln" style="background:repeating-linear-gradient(90deg,#be123c 0 5px,transparent 5px 11px)"></span>Запрет по отметке, в OSM его нет</div>';
 
 /* ---------- info sheet ---------- */
 const sheet = document.getElementById('sheet');
@@ -392,34 +478,73 @@ layers.pois = L.geoJSON(DATA.pois, {
 /* ---------- banned streets: confidence styling, highlight, entries, labels, list ---------- */
 const CONF_ICON = {sign:'✅', bulk:'⚠️', old:'⏳', closed:'🚫', osm:'ℹ️', unknown:'❔'};
 function banStyle(f){
+  const v = VERDICTS[f.properties.run];
+  if (v && v.type === 'nosign') return {color:'#64748b', weight:5, opacity:0.8, dashArray:'3 9', lineCap:'round'};
+  if (v && v.type === 'sign') return {color:'#e11d48', weight:6, opacity:0.95, dashArray:null, lineCap:'round'};
   const c = f.properties.conf;
-  if (c === 'sign' || c === 'closed') return {color:'#e11d48', weight:6, opacity:0.92, lineCap:'round'};
+  if (c === 'sign' || c === 'closed') return {color:'#e11d48', weight:6, opacity:0.92, dashArray:null, lineCap:'round'};
   if (c === 'bulk') return {color:'#e11d48', weight:5, opacity:0.85, dashArray:'10 7', lineCap:'butt'};
   if (c === 'old') return {color:'#e11d48', weight:5, opacity:0.8, dashArray:'4 8', lineCap:'butt'};
-  return {color:'#e11d48', weight:5, opacity:0.85, lineCap:'round'};
+  return {color:'#e11d48', weight:5, opacity:0.85, dashArray:null, lineCap:'round'};
 }
 const banHighlight = L.layerGroup();
-function highlightStreet(name){
+function highlightStreet(name, run){ // whole street faint, the run a report applies to bright
   banHighlight.clearLayers();
-  DATA.banned.features.filter(f => f.properties.n === name).forEach(f =>
-    L.polyline(f.geometry.coordinates.map(c => [c[1], c[0]]), {renderer, color:'#fde047', weight:16, opacity:0.75, interactive:false}).addTo(banHighlight));
+  DATA.banned.features.filter(f => f.properties.n === name).forEach(f => {
+    const strong = f.properties.run === run;
+    L.polyline(f.geometry.coordinates.map(c => [c[1], c[0]]), {renderer, color:'#fde047', weight:strong ? 18 : 12, opacity:strong ? 0.85 : 0.35, interactive:false}).addTo(banHighlight);
+  });
   if (!map.hasLayer(banHighlight)) banHighlight.addTo(map);
   bannedLines.bringToFront();
 }
 function clearHighlight(){ banHighlight.clearLayers(); }
-function openBanned(p){
-  highlightStreet(p.n);
-  const conf = CONF_ICON[p.conf] || 'ℹ️';
-  const segs = DATA.banned.features.filter(f => f.properties.n === p.n).length;
-  showSheet('#e11d48', p.n, p.reason + ' · ' + p.h + ' · сегментов: ' + segs,
-    conf + ' ' + p.src + '.\nВ OSM: ' + p.tag + (p.comment ? '\nКомментарий правки: «' + p.comment + '»' : ''),
-    extra(p) + osmLink('way', p.id), [
-      {label:'Показать всю улицу', fn:() => { const b = L.latLngBounds([]); DATA.banned.features.filter(f => f.properties.n === p.n).forEach(f => f.geometry.coordinates.forEach(c => b.extend([c[1], c[0]]))); map.fitBounds(b, {padding:[40, 40]}); }},
-    ]);
+function fitToFeatures(fs){
+  const b = L.latLngBounds([]); fs.forEach(f => f.geometry.coordinates.forEach(c => b.extend([c[1], c[0]])));
+  if (b.isValid()) map.fitBounds(b, {paddingTopLeft:[30, 150], paddingBottomRight:[30, 280], maxZoom:17});
 }
+function fitStreet(name){ fitToFeatures(DATA.banned.features.filter(f => f.properties.n === name)); }
+function fitRun(run){ fitToFeatures(RUN_FEATS[run] || []); }
+function wayMid(p){ const c = WAY_FEAT.get(p.id).geometry.coordinates, m = c[Math.floor(c.length / 2)]; return L.latLng(m[1], m[0]); }
+function openBanned(p, latlng){
+  highlightStreet(p.n, p.run);
+  const where = latlng ? L.latLng(latlng) : wayMid(p);
+  const ri = runInfo(p.run), v = VERDICTS[p.run];
+  const lines = [(CONF_ICON[p.conf] || 'ℹ️') + ' ' + p.src + '.', 'В OSM: ' + p.tag];
+  if (p.comment) lines.push('Комментарий правки: «' + p.comment + '»');
+  lines.push('Участок (подсвечен): ' + ri.segs + ' сегм. · ' + fmtLen(ri.len));
+  if (v) {
+    lines.push((v.type === 'sign' ? '⛔ Знак есть' : '🟢 Знака нет') + ' · ' + (v.mine ? 'моя отметка' : 'общая отметка') + (v.mark.date ? ' от ' + fmtDate(v.mark.date) : ''));
+    if (v.type === 'nosign') lines.push('Маршрут всё равно объезжает участок, пока запрет стоит в OSM.');
+  } else lines.push('Видели въезд на участок? Отметьте, есть ли знак.');
+  const mineType = v && v.mine ? v.type : null;
+  showSheet(v && v.type === 'nosign' ? '#64748b' : '#e11d48', p.n, p.reason + ' · ' + p.h, lines.join('\n'), extra(p) + osmLink('way', p.id), [
+    {label:'⛔ Знак есть', cls:mineType === 'sign' ? 'on' : '', fn:() => reportSign('sign', p, where)},
+    {label:'🟢 Знака нет', cls:mineType === 'nosign' ? 'on' : '', fn:() => reportSign('nosign', p, where)},
+    {label:'Показать всю улицу', cls:'wide', fn:() => fitStreet(p.n)},
+  ]);
+}
+// one tap from the card: create, switch or (tapping the active button again) remove my report for this run
+function reportSign(type, p, where){
+  const runWays = new Set((RUN_FEATS[p.run] || []).map(f => f.properties.id));
+  const existing = myMarks.find(m => isSignReport(m) && runWays.has(markWay(m)));
+  const v = VERDICTS[p.run], now = Date.now();
+  const pos = {lat:+where.lat.toFixed(5), lon:+where.lng.toFixed(5)};
+  if (existing && existing.type === type && v && v.mark === existing) {
+    myMarks = myMarks.filter(m => m !== existing);
+    toast('Отметка снята');
+  } else {
+    if (existing) Object.assign(existing, pos, {type, way:p.id, street:p.n, date:today(), ts:now});
+    else myMarks.push(Object.assign({id:'m' + now.toString(36), type}, pos, {way:p.id, street:p.n, text:'', date:today(), ts:now}));
+    toast(type === 'sign' ? 'Отмечено: знак есть' : 'Отмечено: знака нет');
+  }
+  saveMarks(); marksChanged();
+  if (!state.marks) { state.marks = true; applyLayers(); }
+  openBanned(p, where);
+}
+function marksChanged(){ renderMarks(); computeVerdicts(); bannedLines.setStyle(banStyle); }
 const bannedLines = L.geoJSON(DATA.banned, {
   renderer, style:banStyle,
-  onEachFeature:(f, l) => l.on('click', e => { L.DomEvent.stopPropagation(e); openBanned(f.properties); })
+  onEachFeature:(f, l) => l.on('click', e => { L.DomEvent.stopPropagation(e); openBanned(f.properties, e.latlng); })
 });
 // entry points into a banned zone (zoom >= 14)
 const banEntries = L.geoJSON(DATA.entries, {
@@ -427,7 +552,7 @@ const banEntries = L.geoJSON(DATA.entries, {
   onEachFeature:(f, l) => l.on('click', e => {
     L.DomEvent.stopPropagation(e);
     const w = DATA.banned.features.find(x => x.properties.id === f.properties.way);
-    if (w) openBanned(w.properties);
+    if (w) openBanned(w.properties, l.getLatLng());
   })
 });
 // one name label per street on its longest segment (zoom >= 15)
@@ -454,21 +579,26 @@ function syncBanned(){
 map.on('zoomend', syncBanned);
 // list of banned streets
 const listPanel = document.getElementById('listPanel');
-(() => {
+function renderBanList(){
   const groups = {};
-  DATA.banned.features.forEach(f => { const p = f.properties; (groups[p.n] = groups[p.n] || {n:0, conf:{}, first:p}).n++; groups[p.n].conf[p.conf] = (groups[p.n].conf[p.conf] || 0) + 1; });
+  DATA.banned.features.forEach(f => {
+    const p = f.properties, g = groups[p.n] = groups[p.n] || {n:0, conf:{}, first:p, sign:0, nosign:0};
+    g.n++; g.conf[p.conf] = (g.conf[p.conf] || 0) + 1;
+  });
+  Object.entries(VERDICTS).forEach(([run, v]) => { const fs = RUN_FEATS[run]; if (fs && groups[fs[0].properties.n]) groups[fs[0].properties.n][v.type]++; });
   const order = ['sign', 'closed', 'osm', 'bulk', 'old', 'unknown'];
   const rows = Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0], 'ru'));
-  const el = document.getElementById('banList');
+  const el = document.getElementById('banList'); el.innerHTML = '';
   rows.forEach(([name, g]) => {
     const mainConf = order.find(k => g.conf[k]) || 'unknown';
+    const badges = (g.sign ? '⛔' : '') + (g.nosign ? '🟢' : '');
     const b = document.createElement('button');
-    b.innerHTML = '<span>' + CONF_ICON[mainConf] + '</span><span>' + esc(name) + '</span><span class="cnt">' + g.n + '</span>';
-    b.onclick = () => { listPanel.classList.remove('show'); if (!state.banned) { state.banned = true; applyLayers(); } openBanned(g.first); document.querySelector('#shActions button').click(); };
+    b.innerHTML = '<span>' + CONF_ICON[mainConf] + '</span><span>' + esc(name) + '</span><span class="cnt">' + badges + ' ' + g.n + '</span>';
+    b.onclick = () => { listPanel.classList.remove('show'); if (!state.banned) { state.banned = true; applyLayers(); } fitStreet(name); openBanned(g.first); };
     el.appendChild(b);
   });
-})();
-document.getElementById('btnBanList').onclick = () => { document.getElementById('legend').classList.remove('show'); sheet.classList.remove('show'); listPanel.classList.add('show'); };
+}
+document.getElementById('btnBanList').onclick = () => { renderBanList(); document.getElementById('legend').classList.remove('show'); sheet.classList.remove('show'); listPanel.classList.add('show'); };
 document.getElementById('listClose').onclick = () => listPanel.classList.remove('show');
 
 // zoom-dependent point layers (keep the map light when zoomed out)
@@ -492,69 +622,178 @@ map.on('zoomend', syncPoints);
 
 /* ---------- marks: shared (from repo) + mine (localStorage) ---------- */
 const MARK_TYPES = {
-  sign:   {label:'Знак запрета', icon:'⛔', color:'#e11d48'},
+  sign:   {label:'Знак запрета мото', icon:'⛔', color:'#e11d48'},
+  nosign: {label:'Знака нет', icon:'🟢', color:'#16a34a'},
   danger: {label:'Опасное место', icon:'⚠️', color:'#f59e0b'},
   police: {label:'Пост / патруль', icon:'👮', color:'#1d4ed8'},
   good:   {label:'Хорошая дорога', icon:'👍', color:'#16a34a'},
   fuel:   {label:'АЗС / сервис', icon:'⛽', color:'#0891b2'},
   note:   {label:'Заметка', icon:'📝', color:'#6b7280'},
 };
-let myMarks = [];
-try { myMarks = JSON.parse(localStorage.getItem('mapmot.marks') || '[]'); } catch (e) {}
-function saveMarks(){ try { localStorage.setItem('mapmot.marks', JSON.stringify(myMarks)); } catch (e) { toast('Не удалось сохранить'); } }
+// myMarks / saveMarks are defined near the top of the script
 
 layers.marks = L.layerGroup();
 function markIcon(m, mine){
+  if (isSignReport(m)) return L.divIcon({className:'', html:signPinHtml(m.type, mine), iconSize:[30, 30], iconAnchor:[15, 15]});
   const t = MARK_TYPES[m.type] || MARK_TYPES.note;
   return L.divIcon({className:'', html:'<div class="mark'+(mine ? ' mine' : '')+'" style="--c:'+t.color+'"><span>'+t.icon+'</span></div>',
     iconSize:[30,30], iconAnchor:[15,30]});
 }
 function renderMarks(){
   layers.marks.clearLayers();
-  (DATA.marks || []).forEach(m => L.marker([m.lat, m.lon], {icon:markIcon(m, false)}).on('click', e => { L.DomEvent.stopPropagation(e); openMark(m, false); }).addTo(layers.marks));
-  myMarks.forEach(m => L.marker([m.lat, m.lon], {icon:markIcon(m, true)}).on('click', e => { L.DomEvent.stopPropagation(e); openMark(m, true); }).addTo(layers.marks));
+  const add = (m, mine) => {
+    const open = e => { L.DomEvent.stopPropagation(e); openMark(m, mine); };
+    // a sign reported on a street without an OSM ban: draw that street piece as red dots
+    if (m.type === 'sign' && Array.isArray(m.geom) && m.geom.length > 1 && !markWay(m))
+      L.polyline(m.geom, {renderer, color:'#be123c', weight:6, opacity:0.9, dashArray:'1 11', lineCap:'round'}).on('click', open).addTo(layers.marks);
+    L.marker([m.lat, m.lon], {icon:markIcon(m, mine), zIndexOffset:isSignReport(m) ? 600 : 0}).on('click', open).addTo(layers.marks);
+  };
+  (DATA.marks || []).forEach(m => add(m, false));
+  myMarks.forEach(m => add(m, true));
 }
 function openMark(m, mine){
   const t = MARK_TYPES[m.type] || MARK_TYPES.note;
   const meta = [];
-  if (m.date) meta.push('<span>'+esc(m.date)+'</span>');
+  if (m.date) meta.push('<span>'+esc(fmtDate(m.date))+'</span>');
   if (m.url) meta.push('<a href="'+esc(m.url)+'" target="_blank" rel="noopener">Источник ↗</a>');
   meta.push('<a href="https://www.google.com/maps/dir/?api=1&destination='+m.lat+','+m.lon+'" target="_blank" rel="noopener">Маршрут ↗</a>');
-  meta.push('<span>'+m.lat.toFixed(5)+', '+m.lon.toFixed(5)+'</span>');
   const actions = mine ? [
     {label:'Изменить', fn:() => openForm(m)},
-    {label:'Удалить', cls:'danger', fn:() => { if (confirm('Удалить отметку?')) { myMarks = myMarks.filter(x => x.id !== m.id); saveMarks(); renderMarks(); sheet.classList.remove('show'); toast('Удалено'); } }},
+    {label:'Удалить', cls:'danger', fn:() => { if (confirm('Удалить отметку?')) { myMarks = myMarks.filter(x => x.id !== m.id); saveMarks(); marksChanged(); sheet.classList.remove('show'); clearHighlight(); toast('Удалено'); } }},
   ] : [];
-  showSheet(t.color, t.icon + ' ' + t.label, mine ? 'Моя отметка' : 'Общая отметка', m.text, meta.join(''), actions);
+  if (!isSignReport(m)) {
+    meta.push('<span>'+m.lat.toFixed(5)+', '+m.lon.toFixed(5)+'</span>');
+    showSheet(t.color, t.icon + ' ' + t.label, mine ? 'Моя отметка' : 'Общая отметка', m.text, meta.join(''), actions);
+    return;
+  }
+  const way = markWay(m), f = way && WAY_FEAT.get(way);
+  const street = m.street || (f && f.properties.n) || '';
+  const lines = [];
+  if (m.text) lines.push(m.text);
+  let noteText = null;
+  if (f) {
+    const run = f.properties.run, ri = runInfo(run), v = VERDICTS[run];
+    lines.push((m.type === 'sign' ? 'Подтверждает красный участок: ' : 'Спорит с красным участком: ') + ri.segs + ' сегм. · ' + fmtLen(ri.len) + '.');
+    if (v && v.mark !== m) lines.push('На участке есть более новая отметка: ' + (v.type === 'sign' ? 'знак есть' : 'знака нет') + (v.mark.date ? ' от ' + fmtDate(v.mark.date) : '') + '.');
+    if (m.type === 'nosign') {
+      lines.push('Маршрут всё равно объезжает участок, пока запрет стоит в OSM.' + (mine ? ' Исправить можно заметкой в OSM.' : ''));
+      noteText = 'Знака 3.5 «Движение мотоциклов запрещено» на улице ' + street + ' нет (проверено ' + fmtDate(m.date) + '), а в OSM стоит motorcycle=no.';
+    }
+    actions.push({label:'Показать участок', cls:mine ? 'wide' : '', fn:() => fitRun(run)});
+  } else if (m.type === 'sign') {
+    lines.push('В OSM запрета здесь нет. Маршрут объезжает место вокруг отметки (около 25 м).' + (m.geom ? ' Отрезок улицы показан красными точками.' : ''));
+    if (mine) lines.push('Чтобы запрет появился у всех, оставьте заметку в OSM.');
+    noteText = 'Знак 3.5 «Движение мотоциклов запрещено»' + (street ? ' на улице ' + street : '') + ' (видел ' + fmtDate(m.date) + '). Нужно добавить motorcycle=no.';
+  } else {
+    lines.push('Рядом нет красных участков, отметка сохранена как напоминание.');
+  }
+  if (noteText && mine) meta.push('<a href="https://www.openstreetmap.org/note/new#map=19/' + m.lat + '/' + m.lon + '" target="_blank" rel="noopener" id="osmNote">Заметка в OSM ↗</a>');
+  meta.push('<span>'+m.lat.toFixed(5)+', '+m.lon.toFixed(5)+'</span>');
+  showSheet(m.type === 'sign' ? '#d21f1f' : '#16a34a', t.icon + ' ' + t.label, [street || 'Улица не определена', mine ? 'моя отметка' : 'общая отметка'].join(' · '), lines.join('\n'), meta.join(''), actions);
+  if (f) highlightStreet(f.properties.n, f.properties.run);
+  const note = document.getElementById('osmNote');
+  if (note && noteText) note.addEventListener('click', () => {
+    try { navigator.clipboard.writeText(noteText).then(() => toast('Текст заметки скопирован, вставьте его в OSM'), () => {}); } catch (e) {}
+  });
 }
 
 // add / edit form
 const form = document.getElementById('form');
-let editing = null; // {id?, lat, lon}
+let editing = null; // {id?, lat, lon, way?, street?, osmWay?}
 let selType = 'sign';
-const typesEl = document.getElementById('types');
+const typesEl = document.getElementById('types'), formStreet = document.getElementById('formStreet');
 Object.entries(MARK_TYPES).forEach(([k, t]) => {
   const b = document.createElement('button'); b.className = 'type'; b.dataset.type = k; b.style.setProperty('--c', t.color);
   b.innerHTML = t.icon + ' ' + t.label; b.onclick = () => { selType = k; syncTypes(); }; typesEl.appendChild(b);
 });
-function syncTypes(){ typesEl.querySelectorAll('.type').forEach(b => b.classList.toggle('sel', b.dataset.type === selType)); }
+function syncTypes(){
+  typesEl.querySelectorAll('.type').forEach(b => b.classList.toggle('sel', b.dataset.type === selType));
+  const signType = selType === 'sign' || selType === 'nosign';
+  formStreet.hidden = !signType;
+  if (signType && editing) detectStreet(editing);
+}
+// street name for a sign report: nearest red segment (offline), else Nominatim reverse geocoding (sends the point's coordinates)
+async function lookupStreet(lat, lon){
+  const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=16&accept-language=ru&lat=' + lat.toFixed(6) + '&lon=' + lon.toFixed(6));
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  const isRoad = j.category === 'highway';
+  return {street:(isRoad && j.name) || (j.address && j.address.road) || '', osmWay:isRoad && j.osm_type === 'way' ? j.osm_id : undefined};
+}
+let streetReq = 0;
+async function detectStreet(target){
+  const my = ++streetReq;
+  const near = nearestBanned([target.lat, target.lon], 35);
+  if (near) { target.way = near.feat.properties.id; target.street = near.feat.properties.n; formStreet.textContent = 'Улица: ' + target.street + ' · рядом красный участок'; return; }
+  if (target.street) { formStreet.textContent = 'Улица: ' + target.street; return; }
+  if (!navigator.onLine) { formStreet.textContent = 'Нет связи: улица определится позже, отметка сохранится по координатам'; return; }
+  formStreet.textContent = 'Определяю улицу…';
+  try {
+    const s = await lookupStreet(target.lat, target.lon);
+    if (my !== streetReq || editing !== target) return;
+    Object.assign(target, s);
+    formStreet.textContent = s.street ? 'Улица: ' + s.street : 'Улица не определена, отметка сохранится по координатам';
+  } catch (e) { if (my === streetReq) formStreet.textContent = 'Улица не определена, отметка сохранится по координатам'; }
+}
+// geometry of the reported OSM way (Overpass), so a sign on a street without an OSM ban is visible as a line
+async function fetchWayGeom(id){
+  const body = 'data=' + encodeURIComponent('[out:json][timeout:25];way(' + id + ');out geom;');
+  for (const ep of ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter']) {
+    try {
+      const r = await fetch(ep, {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body});
+      if (!r.ok) continue;
+      const w = ((await r.json()).elements || [])[0];
+      if (w && Array.isArray(w.geometry)) return w.geometry.slice(0, 500).map(p => [+p.lat.toFixed(5), +p.lon.toFixed(5)]);
+    } catch (e) {}
+  }
+  return null;
+}
+async function attachWayGeom(m){
+  const g = await fetchWayGeom(m.osmWay);
+  if (!g || g.length < 2 || !myMarks.includes(m)) return;
+  m.geom = g; saveMarks(); renderMarks();
+}
+let fillingStreets = false;
+async function fillMissingStreets(){ // sign reports made offline get their street once the phone is online
+  if (fillingStreets || !navigator.onLine) return;
+  fillingStreets = true;
+  try {
+    for (const m of myMarks.filter(x => isSignReport(x) && !x.street && !markWay(x)).slice(0, 5)) {
+      try { Object.assign(m, await lookupStreet(m.lat, m.lon)); saveMarks(); if (m.type === 'sign' && m.osmWay && !m.geom) await attachWayGeom(m); } catch (e) {}
+      await new Promise(r => setTimeout(r, 1100)); // Nominatim: at most one request per second
+    }
+  } finally { fillingStreets = false; }
+}
 function openForm(m){
-  editing = m; selType = m.type || 'sign'; syncTypes();
+  editing = m; selType = m.type || 'sign';
   document.getElementById('formTitle').textContent = m.id ? 'Изменить отметку' : 'Новая отметка';
   document.getElementById('formText').value = m.text || '';
   sheet.classList.remove('show'); stopAddMode(); form.classList.add('show');
+  syncTypes();
 }
-function closeForm(){ form.classList.remove('show'); editing = null; }
+function closeForm(){ form.classList.remove('show'); editing = null; streetReq++; }
 document.getElementById('formClose').onclick = closeForm;
 document.getElementById('formCancel').onclick = closeForm;
 document.getElementById('formSave').onclick = () => {
   if (!editing) return;
   const text = document.getElementById('formText').value.trim();
-  if (editing.id) { const m = myMarks.find(x => x.id === editing.id); if (m) { m.type = selType; m.text = text; } }
-  else myMarks.push({id:'m' + Date.now().toString(36), type:selType, lat:+editing.lat.toFixed(5), lon:+editing.lon.toFixed(5), text, date:new Date().toISOString().slice(0, 10)});
-  saveMarks(); renderMarks(); closeForm();
+  const signType = selType === 'sign' || selType === 'nosign', now = Date.now();
+  const where = signType ? {way:editing.way || undefined, street:editing.street || undefined, osmWay:editing.osmWay || undefined} : {};
+  let saved = null;
+  if (editing.id) {
+    saved = myMarks.find(x => x.id === editing.id);
+    if (saved) {
+      if (saved.type !== selType && signType) Object.assign(saved, {date:today(), ts:now}); // a new observation
+      Object.assign(saved, {type:selType, text}, where);
+    }
+  } else {
+    saved = Object.assign({id:'m' + now.toString(36), type:selType, lat:+editing.lat.toFixed(5), lon:+editing.lon.toFixed(5), text, date:today(), ts:now}, where);
+    myMarks.push(saved);
+  }
+  saveMarks(); marksChanged(); closeForm();
   if (!state.marks) { state.marks = true; applyLayers(); }
   toast('Отметка сохранена');
+  if (saved && saved.type === 'sign' && saved.osmWay && !saved.geom && !markWay(saved)) attachWayGeom(saved);
 };
 // long press (contextmenu) on map => new mark there
 map.on('contextmenu', e => { openForm({lat:e.latlng.lat, lon:e.latlng.lng}); });
@@ -580,11 +819,22 @@ document.getElementById('btnImport').onclick = () => {
   try {
     const arr = JSON.parse(raw); if (!Array.isArray(arr)) throw new Error();
     let n = 0;
-    arr.forEach(m => { if (typeof m.lat === 'number' && typeof m.lon === 'number' && !myMarks.some(x => x.id === m.id)) { myMarks.push({id:m.id || 'm' + Math.random().toString(36).slice(2), type:m.type in MARK_TYPES ? m.type : 'note', lat:m.lat, lon:m.lon, text:m.text || '', date:m.date || ''}); n++; } });
-    saveMarks(); renderMarks(); toast('Добавлено отметок: ' + n);
+    arr.forEach(m => {
+      if (!m || typeof m.lat !== 'number' || typeof m.lon !== 'number' || myMarks.some(x => x.id === m.id)) return;
+      const x = {id:typeof m.id === 'string' ? m.id.slice(0, 40) : 'm' + Math.random().toString(36).slice(2), type:m.type in MARK_TYPES ? m.type : 'note',
+                 lat:m.lat, lon:m.lon, text:String(m.text || '').slice(0, 500), date:String(m.date || '').slice(0, 10)};
+      if (typeof m.ts === 'number') x.ts = m.ts;
+      if (Number.isInteger(m.way)) x.way = m.way;
+      if (Number.isInteger(m.osmWay)) x.osmWay = m.osmWay;
+      if (typeof m.street === 'string') x.street = m.street.slice(0, 120);
+      if (Array.isArray(m.geom)) { const g = m.geom.filter(p => Array.isArray(p) && typeof p[0] === 'number' && typeof p[1] === 'number').slice(0, 500); if (g.length > 1) x.geom = g; }
+      myMarks.push(x); n++;
+    });
+    saveMarks(); marksChanged(); toast('Добавлено отметок: ' + n);
   } catch (e) { toast('Не удалось разобрать JSON'); }
 };
 renderMarks();
+fillMissingStreets();
 
 /* ---------- chips / persistence ---------- */
 const order = ['corridors', 'hazards', 'radars', 'pois', 'banned', 'marks']; // banned drawn on top of lines, marks are DOM markers
@@ -680,24 +930,7 @@ function signPolygons(){ // ~50 m boxes around "sign" marks so the router avoids
   });
   return polys;
 }
-// distance (m) from point to banned lines, used to double-check the result
-const R = 6371000, cosLat = Math.cos(41.31 * Math.PI / 180);
-function toXY(lat, lon){ return [lon * Math.PI / 180 * R * cosLat, lat * Math.PI / 180 * R]; }
-const bannedSegs = [];
-DATA.banned.features.forEach(f => { const c = f.geometry.coordinates; for (let i = 1; i < c.length; i++) bannedSegs.push([toXY(c[i-1][1], c[i-1][0]), toXY(c[i][1], c[i][0]), f.properties.n]); });
-function nearestBanned(pt, maxDist){
-  const [px, py] = toXY(pt[0], pt[1]);
-  let best = null;
-  for (const [a, b, name] of bannedSegs) {
-    if (Math.abs(a[0] - px) > maxDist + 300 && Math.abs(b[0] - px) > maxDist + 300) continue;
-    const dx = b[0] - a[0], dy = b[1] - a[1], len2 = dx*dx + dy*dy;
-    let t = len2 ? ((px - a[0]) * dx + (py - a[1]) * dy) / len2 : 0; t = Math.max(0, Math.min(1, t));
-    const ex = a[0] + t*dx - px, ey = a[1] + t*dy - py, d2 = ex*ex + ey*ey;
-    if (d2 < maxDist * maxDist && (!best || d2 < best.d2)) best = {name, d2};
-  }
-  return best ? {name:best.name, dist:Math.sqrt(best.d2)} : null;
-}
-function nearBanned(pt){ const n = nearestBanned(pt, 12); return n ? n.name : null; }
+// toXY / nearestBanned / nearBanned (distance to red segments) are defined near the top of the script
 async function buildRoute(){
   if (!rtA || !rtB) return;
   const a = rtA.getLatLng(), b = rtB.getLatLng(), my = ++rtReq;
@@ -774,7 +1007,7 @@ map.on('click', e => {
 const APP_VERSION = '__VERSION__';
 document.getElementById('buildVersion').textContent = APP_VERSION;
 function setOnline(){ document.body.classList.toggle('offline', !navigator.onLine); }
-window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); });
+window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); fillMissingStreets(); });
 window.addEventListener('offline', () => { setOnline(); toast('Нет связи: работаю офлайн'); });
 setOnline();
 

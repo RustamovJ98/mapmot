@@ -106,8 +106,37 @@ def build_banned():
         if src.get("comment"):
             props["comment"] = src["comment"][:140]
         feats.append(feature("LineString", way_coords(w), props))
+    assign_runs(feats)
     print("  ban sources:", conf_count)
     return fc(feats), build_entries(feats)
+
+
+def assign_runs(feats):
+    """Group banned ways into contiguous runs: same street name, chained through shared end nodes.
+
+    A sign stands at the start of such a run, so user reports ("sign here" / "no sign") apply to the run.
+    Each carriageway of a dual road usually forms its own run, which matches one sign per direction.
+    """
+    parent = list(range(len(feats)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    ends = {}
+    for i, f in enumerate(feats):
+        c = f["geometry"]["coordinates"]
+        for pt in (c[0], c[-1]):
+            ends.setdefault((f["properties"]["n"], round(pt[0], 6), round(pt[1], 6)), []).append(i)
+    for idxs in ends.values():
+        for j in idxs[1:]:
+            parent[find(j)] = find(idxs[0])
+    roots = {}
+    for i, f in enumerate(feats):
+        f["properties"]["run"] = roots.setdefault(find(i), len(roots))
+    print("  contiguous runs:", len(roots))
 
 
 def build_entries(banned_feats):
