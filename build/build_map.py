@@ -78,6 +78,82 @@ def source_note(src, closed):
     return "osm", f"Правка OSM ({who})"
 
 
+def build_twins(max_gap=40.0, min_share=0.5):
+    """Opposite carriageways of banned divided streets that OSM leaves without a ban.
+
+    In Tashkent the motorcycle ban is often tagged on one carriageway only, while the sign stands at the
+    entrances of both. A one-way way with the same name, running the other way within `max_gap` metres of a
+    banned one-way way, becomes a "twin": drawn as a probable ban and avoided by routing, unless OSM
+    explicitly allows motorcycles there or a rider reports that there is no sign.
+    """
+    import math
+    R, cl = 6371000.0, math.cos(math.radians(41.31))
+
+    def xy(p):
+        return math.radians(p["lon"]) * R * cl, math.radians(p["lat"]) * R
+
+    def oneway(t):
+        return t.get("oneway") in ("yes", "true", "1", "-1")
+
+    def names(t):
+        return {t.get(k) for k in ("name", "name:ru", "name:uz")} - {None}
+
+    def bearing(w):
+        g = w["geometry"]
+        a, b = (g[-1], g[0]) if w["tags"].get("oneway") == "-1" else (g[0], g[-1])
+        (x1, y1), (x2, y2) = xy(a), xy(b)
+        return math.degrees(math.atan2(x2 - x1, y2 - y1)) % 360
+
+    def dist(p, pts):
+        px, py = xy(p)
+        best = float("inf")
+        for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+            dx, dy = bx - ax, by - ay
+            l2 = dx * dx + dy * dy
+            t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / l2)) if l2 else 0.0
+            best = min(best, math.hypot(ax + t * dx - px, ay + t * dy - py))
+        return best
+
+    banned_all = load("banned")
+    banned_ids = {w["id"] for w in banned_all}
+    by_name = {}
+    for b in banned_all:
+        if not oneway(b["tags"]) or b["tags"].get("name") == "разворот" or not b.get("geometry"):
+            continue
+        entry = (b["id"], bearing(b), [xy(p) for p in b["geometry"]])
+        for n in names(b["tags"]):
+            by_name.setdefault(n, []).append(entry)
+
+    twins = []
+    for w in load("network"):
+        t = w["tags"]
+        if (w["id"] in banned_ids or not oneway(t) or t.get("highway", "").endswith("_link")
+                or t.get("motorcycle") in ("yes", "designated", "permissive") or len(w.get("geometry", [])) < 2):
+            continue
+        candidates = {e[0]: e for n in names(t) for e in by_name.get(n, [])}
+        if not candidates:
+            continue
+        heading = bearing(w)
+        opposite = [(bid, pts) for bid, hb, pts in candidates.values() if abs((heading - hb + 180) % 360 - 180) > 135]
+        if not opposite:
+            continue
+        near, twin_of = 0, set()
+        for p in w["geometry"]:
+            hits = [bid for bid, pts in opposite if dist(p, pts) <= max_gap]
+            if hits:
+                near += 1
+                twin_of.update(hits)
+        if near / len(w["geometry"]) < min_share:
+            continue
+        twins.append(feature("LineString", way_coords(w), {
+            "id": w["id"], "n": ru_name(t) or "Без названия", "h": hw_ru(t),
+            "reason": "Вероятно, мотоциклам запрещено", "tag": "на этой стороне запрета нет, он отмечен на встречной",
+            "conf": "twin", "src": "Запрет в OSM отмечен только на встречной стороне этой улицы, скорее всего знак стоит и здесь",
+            "twinOf": sorted(twin_of), "lanes": t.get("lanes"), "maxspeed": t.get("maxspeed"),
+        }))
+    return twins
+
+
 def build_banned():
     src_path = ROOT / "data" / "ban_sources.json"
     sources = json.loads(src_path.read_text(encoding="utf-8")) if src_path.exists() else {}
@@ -107,6 +183,9 @@ def build_banned():
         if src.get("comment"):
             props["comment"] = src["comment"][:140]
         feats.append(feature("LineString", way_coords(w), props))
+    twins = build_twins()
+    feats.extend(twins)
+    conf_count["twin"] = len(twins)
     assign_runs(feats)
     print("  ban sources:", conf_count)
     return fc(feats), build_entries(feats)
@@ -405,10 +484,17 @@ def main():
     pois = build_pois()
     osm_ts = json.loads((RAW / "banned.json").read_text(encoding="utf-8"))["osm3s"]["timestamp_osm_base"]
     osm_date = osm_ts[:10]
-    age_days = (datetime.now(timezone.utc) - datetime.fromisoformat(osm_ts.replace("Z", "+00:00"))).days
-    if age_days >= 3:
-        # the weekly bot publishes fresh data; a local build from an old cache would roll the site back
-        print(f"  ! WARNING: OSM data in data/raw is {age_days} days old. Run build/fetch_osm.py --force before publishing.")
+    # the weekly bot publishes fresh data; a local build from an old cache or a lagging mirror would roll the site back
+    for raw_file in sorted(RAW.glob("*.json")):
+        try:
+            raw_ts = json.loads(raw_file.read_text(encoding="utf-8")).get("osm3s", {}).get("timestamp_osm_base")
+        except Exception:  # noqa: BLE001  (not an Overpass file)
+            continue
+        if raw_ts:
+            age_days = (datetime.now(timezone.utc) - datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))).days
+            if age_days >= 3:
+                print(f"  ! WARNING: {raw_file.name} holds OSM data from {raw_ts[:10]} ({age_days} days old). "
+                      "Run build/fetch_osm.py --force before publishing.")
 
     tmpl = (ROOT / "build" / "template.html").read_text(encoding="utf-8")
     build_ru_names()

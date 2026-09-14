@@ -7,6 +7,7 @@ import json
 import sys
 import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -78,19 +79,37 @@ out tags;
 }
 
 
+MAX_LAG_HOURS = 36  # mirrors can lag by days; stale tags would silently roll the map back
+
+
+def data_age_hours(result):
+    ts = result.get("osm3s", {}).get("timestamp_osm_base")
+    if not ts:
+        return None
+    return (datetime.now(timezone.utc) - datetime.fromisoformat(ts.replace("Z", "+00:00"))).total_seconds() / 3600
+
+
 def fetch(query: str) -> dict:
     data = query.encode("utf-8")
-    last_err = None
+    last_err, got_stale = None, False
     for endpoint in ENDPOINTS:
-        for attempt in range(3):
+        for attempt in range(4):
             try:
                 req = urllib.request.Request(endpoint, data=data, headers={"User-Agent": "MapMot/1.0 (tashkent moto map)"})
                 with urllib.request.urlopen(req, timeout=400) as resp:
-                    return json.loads(resp.read().decode("utf-8"))
+                    result = json.loads(resp.read().decode("utf-8"))
+                age = data_age_hours(result)
+                if age is not None and age > MAX_LAG_HOURS:
+                    print(f"  {endpoint}: data is {age:.0f} h old, trying another server", file=sys.stderr)
+                    got_stale = True
+                    break
+                return result
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 print(f"  {endpoint} attempt {attempt + 1} failed: {e}", file=sys.stderr)
-                time.sleep(10 * (attempt + 1))
+                time.sleep(15 * (attempt + 1))
+    if got_stale:
+        raise RuntimeError("only stale Overpass data available; keeping the cached files")
     raise RuntimeError(f"all endpoints failed: {last_err}")
 
 

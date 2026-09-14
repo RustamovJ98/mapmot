@@ -203,6 +203,7 @@
 <div class="legend" id="legend">
   <div><span class="ln" style="background:var(--red)"></span>Запрет, отмечен по знакам или дорога закрыта</div>
   <div><span class="ln" style="background:repeating-linear-gradient(90deg,var(--red) 0 8px,transparent 8px 13px)"></span>Запрет, не подтверждён: массовая правка или старые данные</div>
+  <div><span class="ln" style="background:repeating-linear-gradient(90deg,var(--red) 0 10px,transparent 10px 14px,var(--red) 14px 16px,transparent 16px 20px)"></span>Вероятный запрет: встречная сторона улицы, в OSM не отмечена</div>
   <div><span class="pt" style="background:#fff;border-color:var(--red)"></span>Въезд в зону запрета (от 16-го зума)</div>
   <div id="legendSigns"></div>
   <div class="tools"><button class="btn" id="btnBanList">Список запретов</button></div>
@@ -248,7 +249,7 @@
 <div class="sheet form" id="listPanel">
   <button class="close" id="listClose">×</button>
   <h3>⛔ Запретные улицы</h3>
-  <div class="sub">Нажмите, чтобы показать улицу на карте. ✅ по знакам, ⚠️ массовая правка, ⏳ старые данные, 🚫 закрыта для всех. Отметки: ⛔ знак есть, 🟢 знака нет</div>
+  <div class="sub">Нажмите, чтобы показать улицу на карте. ✅ по знакам, ⚠️ массовая правка, ⏳ старые данные, 🚫 закрыта для всех, ↔️ встречная сторона без отметки в OSM. Отметки: ⛔ знак есть, 🟢 знака нет</div>
   <div class="list" id="banList"></div>
 </div>
 
@@ -355,7 +356,6 @@ function nearestBanned(pt, maxDist){
   }
   return best ? {name:best.name, dist:Math.sqrt(best.d2), feat:best.feat} : null;
 }
-function nearBanned(pt){ const n = nearestBanned(pt, 12); return n ? n.name : null; }
 
 /* ---------- sign reports: contiguous runs of a red street + latest "sign / no sign" verdict per run ---------- */
 const WAY_FEAT = new Map(), RUN_FEATS = {};
@@ -529,12 +529,13 @@ layers.pois = L.geoJSON(DATA.pois, {
 });
 
 /* ---------- banned streets: confidence styling, highlight, entries, labels, list ---------- */
-const CONF_ICON = {sign:'✅', bulk:'⚠️', old:'⏳', closed:'🚫', osm:'ℹ️', unknown:'❔'};
+const CONF_ICON = {sign:'✅', bulk:'⚠️', old:'⏳', closed:'🚫', osm:'ℹ️', twin:'↔️', unknown:'❔'};
 function banStyle(f){
   const v = VERDICTS[f.properties.run];
   if (v && v.type === 'nosign') return {color:'#64748b', weight:5, opacity:0.8, dashArray:'3 9', lineCap:'round'};
   if (v && v.type === 'sign') return {color:'#e11d48', weight:6, opacity:0.95, dashArray:null, lineCap:'round'};
   const c = f.properties.conf;
+  if (c === 'twin') return {color:'#e11d48', weight:4, opacity:0.75, dashArray:'12 5 2 5', lineCap:'butt'};
   if (c === 'sign' || c === 'closed') return {color:'#e11d48', weight:6, opacity:0.92, dashArray:null, lineCap:'round'};
   if (c === 'bulk') return {color:'#e11d48', weight:5, opacity:0.85, dashArray:'10 7', lineCap:'butt'};
   if (c === 'old') return {color:'#e11d48', weight:5, opacity:0.8, dashArray:'4 8', lineCap:'butt'};
@@ -640,7 +641,7 @@ function renderBanList(){
     g.n++; g.conf[p.conf] = (g.conf[p.conf] || 0) + 1;
   });
   Object.entries(VERDICTS).forEach(([run, v]) => { const fs = RUN_FEATS[run]; if (fs && groups[fs[0].properties.n]) groups[fs[0].properties.n][v.type]++; });
-  const order = ['sign', 'closed', 'osm', 'bulk', 'old', 'unknown'];
+  const order = ['sign', 'closed', 'osm', 'bulk', 'old', 'twin', 'unknown'];
   const rows = Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0], 'ru'));
   const el = document.getElementById('banList'); el.innerHTML = '';
   rows.forEach(([name, g]) => {
@@ -1036,15 +1037,67 @@ function signPolygons(){ // ~50 m boxes around "sign" marks so the router avoids
 let lastRoute = null; // {trip, pts, dest} of the route shown in the panel; ride mode starts from it
 // one Valhalla request: motorcycle costing respects motorcycle=no, sign reports become exclude zones,
 // an optional heading (degrees) keeps a re-route from starting with a U-turn
-async function requestRoute(from, to, heading){
+async function requestRoute(from, to, heading, excludeLocs){
   const start = {lat:from.lat, lon:from.lng};
   if (heading != null) { start.heading = Math.round(heading); start.heading_tolerance = 60; }
   const body = {locations:[start, {lat:to.lat, lon:to.lng}], costing:'motorcycle', units:'kilometers', language:'ru-RU'};
   const polys = signPolygons(); if (polys.length) body.exclude_polygons = polys;
+  if (excludeLocs && excludeLocs.length) body.exclude_locations = excludeLocs.slice(0, 40);
   const res = await fetch(VALHALLA, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   if (!res.ok) throw new Error('HTTP ' + res.status);
   const trip = (await res.json()).trip;
   return {trip, pts:decodeShape(trip.legs[0].shape)};
+}
+// banned ways (including "twin" opposite carriageways) the route really runs along. Route shape points lie on
+// the OSM geometry, so 6 m separates "on this way" from the parallel carriageway about 10 m away.
+function bannedAlong(pts){
+  const along = {}; let prev = null;
+  pts.forEach(p => {
+    const n = nearestBanned(p, 6), f = n && n.feat, v = f && VERDICTS[f.properties.run];
+    const ok = !!f && !(v && v.type === 'nosign'); // a rider reported no sign there: allowed
+    if (ok && prev && prev.key === f.properties.n) {
+      const [x1, y1] = toXY(prev.p[0], prev.p[1]), [x2, y2] = toXY(p[0], p[1]);
+      const a = along[prev.key] = along[prev.key] || {m:0, feats:new Set()};
+      a.m += Math.hypot(x2 - x1, y2 - y1); a.feats.add(prev.f); a.feats.add(f);
+    }
+    prev = ok ? {f, p, key:f.properties.n} : null;
+  });
+  return Object.values(along).filter(a => a.m > 40).flatMap(a => [...a.feats]);
+}
+function featMid(f){ // middle of a way, away from junctions, for Valhalla exclude_locations
+  const c = f.geometry.coordinates, d = i => map.distance([c[i-1][1], c[i-1][0]], [c[i][1], c[i][0]]);
+  let total = 0; for (let i = 1; i < c.length; i++) total += d(i);
+  let acc = 0;
+  for (let i = 1; i < c.length; i++) {
+    const seg = d(i);
+    if (acc + seg >= total / 2) { const t = seg ? (total / 2 - acc) / seg : 0; return {lat:c[i-1][1] + (c[i][1] - c[i-1][1]) * t, lon:c[i-1][0] + (c[i][0] - c[i-1][0]) * t}; }
+    acc += seg;
+  }
+  return {lat:c[0][1], lon:c[0][0]};
+}
+// route, then re-route around banned ways the result still runs along (mostly opposite carriageways that OSM
+// leaves unbanned): at most two extra requests; if Valhalla cannot avoid them the route is kept with a warning
+async function requestRouteSafe(from, to, heading){
+  let res = await requestRoute(from, to, heading), hits = bannedAlong(res.pts), excluded = [];
+  for (let attempt = 0; attempt < 2 && hits.length; attempt++) {
+    const more = hits.filter(f => !excluded.includes(f));
+    if (!more.length) break;
+    excluded = excluded.concat(more);
+    try {
+      const next = await requestRoute(from, to, heading, excluded.map(featMid));
+      const nextHits = bannedAlong(next.pts);
+      if (nextHits.length > hits.length) break;
+      res = next; hits = nextHits;
+    } catch (e) { break; }
+  }
+  return Object.assign(res, {hits, excluded});
+}
+function routeBanNote(hits, excluded){
+  if (hits && hits.length) {
+    const names = [...new Set(hits.map(f => f.properties.n))].join(', ');
+    return hits.every(f => f.properties.conf === 'twin') ? ' · ⚠️ идёт по встречной стороне улицы с запретом: ' + names : ' · ⚠️ идёт по участку с запретом: ' + names;
+  }
+  return excluded && excluded.some(f => f.properties.conf === 'twin') ? ' · запреты обойдены, включая встречные стороны улиц' : ' · запреты обойдены';
 }
 // hand-off links with via points so external navigators follow the same path
 function setHandoffLinks(a, b, trip, pts){
@@ -1061,7 +1114,7 @@ async function buildRoute(){
   const a = rtA.getLatLng(), b = rtB.getLatLng(), my = ++rtReq;
   rp.status.textContent = 'Строю маршрут…'; rp.google.classList.add('hidden'); rp.yandex.classList.add('hidden'); rp.ride.classList.add('hidden');
   try {
-    const {trip, pts} = await requestRoute(a, b);
+    const {trip, pts, hits, excluded} = await requestRouteSafe(a, b);
     if (my !== rtReq) return;
     lastRoute = {trip, pts, dest:b};
     loadRuNames();
@@ -1071,17 +1124,8 @@ async function buildRoute(){
     rtLine = L.polyline(pts, {color:'#2563eb', weight:5, opacity:0.95, interactive:false}).addTo(map);
     if (state.banned) bannedLines.bringToFront();
     map.fitBounds(rtLine.getBounds(), {paddingTopLeft:[30, 150], paddingBottomRight:[30, 220]});
-    // sanity check against red segments
-    // flag only when the route runs *along* a red segment (>60 m), not when it merely crosses one at a junction
-    const along = {}; let prev = null;
-    pts.forEach(p => {
-      const n = nearBanned(p);
-      if (n && prev && prev.n === n) { const [x1, y1] = toXY(prev.p[0], prev.p[1]), [x2, y2] = toXY(p[0], p[1]); along[n] = (along[n] || 0) + Math.hypot(x2 - x1, y2 - y1); }
-      prev = n ? {n, p} : null;
-    });
-    const crossed = new Set(Object.keys(along).filter(n => along[n] > 60));
     const km = trip.summary.length.toFixed(1), min = Math.round(trip.summary.time / 60);
-    rp.status.textContent = km + ' км · ~' + min + ' мин' + (crossed.size ? ' · ⚠️ возможно, идёт по запрету: ' + [...crossed].join(', ') : ' · запреты обойдены') + fuelSummary(lastRoute.fuel);
+    rp.status.textContent = km + ' км · ~' + min + ' мин' + routeBanNote(hits, excluded) + fuelSummary(lastRoute.fuel);
     setHandoffLinks(a, b, trip, pts);
     rp.ride.classList.remove('hidden');
   } catch (e) {
@@ -1290,7 +1334,7 @@ async function rideReroute(ll){
   const cur = ride;
   cur.rerouting = true; cur.lastReroute = Date.now(); renderRide();
   try {
-    const from = L.latLng(ll[0], ll[1]), {trip, pts} = await requestRoute(from, cur.dest, cur.heading);
+    const from = L.latLng(ll[0], ll[1]), {trip, pts} = await requestRouteSafe(from, cur.dest, cur.heading);
     if (ride !== cur) return;
     Object.assign(cur, {route:makeRideRoute(trip, pts), proj:null, s:0, nextK:1, off:0, onRoute:false, rerouting:false});
     lastRoute = {trip, pts, dest:cur.dest, fuel:fuelAlong(cur.route)};
