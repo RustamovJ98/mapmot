@@ -101,7 +101,9 @@ def main() -> None:
         print(f"{name}: downloading…")
         result = fetch(query)
         out.write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
-        print(f"{name}: {len(result.get('elements', []))} elements, {out.stat().st_size // 1024} KB")
+        # mirrors (e.g. overpass.kumi.systems) can lag by days: always look at the data timestamp
+        osm_ts = result.get("osm3s", {}).get("timestamp_osm_base", "?")
+        print(f"{name}: {len(result.get('elements', []))} elements, {out.stat().st_size // 1024} KB, OSM as of {osm_ts}")
         time.sleep(3)
 
 

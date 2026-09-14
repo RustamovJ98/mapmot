@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -382,7 +383,12 @@ def main():
     hazards = build_hazards()
     radars = build_radars()
     pois = build_pois()
-    osm_date = json.loads((RAW / "banned.json").read_text(encoding="utf-8"))["osm3s"]["timestamp_osm_base"][:10]
+    osm_ts = json.loads((RAW / "banned.json").read_text(encoding="utf-8"))["osm3s"]["timestamp_osm_base"]
+    osm_date = osm_ts[:10]
+    age_days = (datetime.now(timezone.utc) - datetime.fromisoformat(osm_ts.replace("Z", "+00:00"))).days
+    if age_days >= 3:
+        # the weekly bot publishes fresh data; a local build from an old cache would roll the site back
+        print(f"  ! WARNING: OSM data in data/raw is {age_days} days old. Run build/fetch_osm.py --force before publishing.")
 
     tmpl = (ROOT / "build" / "template.html").read_text(encoding="utf-8")
     marks_path = ROOT / "data" / "marks.json"
