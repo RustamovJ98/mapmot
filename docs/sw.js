@@ -1,7 +1,8 @@
 /* MapMot service worker: offline app shell + on-demand tile cache. */
-const VERSION = '0a1f8774c0';
+const VERSION = '8d6a3aa453';
 const SHELL = 'mapmot-shell-' + VERSION;
 const TILES = 'mapmot-tiles-v1';
+const PACK = 'mapmot-pack-v1'; // "whole Tashkent offline": filled by the page, never trimmed, survives app updates
 const TILE_HOSTS = ['tile.openstreetmap.org', 'tiles.openfreemap.org'];
 const MAX_TILES = 6000;
 const SHELL_URLS = ['./', './index.html', './vendor/leaflet.min.js', './vendor/leaflet.min.css',
@@ -23,7 +24,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
-  if (TILE_HOSTS.includes(url.hostname)) { e.respondWith(tileHandler(e.request)); return; }
+  if (TILE_HOSTS.includes(url.hostname)) { e.respondWith(tileHandler(e.request, url)); return; }
   if (url.origin === self.location.origin) { e.respondWith(shellHandler(e.request, url)); }
 });
 
@@ -49,9 +50,29 @@ async function shellHandler(req, url) {
   return r;
 }
 
+// vector tiles of the offline pack are stored without the weekly build version in the path,
+// so they keep working after OpenFreeMap publishes a newer build
+function packKey(url) {
+  const m = url.hostname === 'tiles.openfreemap.org' && url.pathname.match(/^\/planet\/[^/]+\/(\d+)\/(\d+)\/(\d+)\.pbf$/);
+  return m ? 'https://tiles.openfreemap.org/planet/pack/' + m[1] + '/' + m[2] + '/' + m[3] + '.pbf' : null;
+}
+
 let putCounter = 0;
-async function tileHandler(req) {
-  const cache = await caches.open(TILES);
+async function tileHandler(req, url) {
+  if (url.searchParams.has('mmpack')) return fetch(req); // pack download: the page stores the response itself
+  const pack = await caches.open(PACK), cache = await caches.open(TILES);
+  if (url.hostname === 'tiles.openfreemap.org' && url.pathname === '/planet') {
+    // TileJSON names the current weekly tile build: network first, a stored copy when offline
+    try {
+      const r = await fetch(req);
+      if (r.ok) cache.put(req, r.clone());
+      return r;
+    } catch (err) {
+      return (await pack.match(req)) || (await cache.match(req)) || new Response('', {status: 503, statusText: 'offline'});
+    }
+  }
+  const packHit = await pack.match(packKey(url) || req);
+  if (packHit) return packHit;
   const hit = await cache.match(req);
   if (hit) return hit;
   try {

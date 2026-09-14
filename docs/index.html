@@ -211,6 +211,11 @@
   <div class="tools">
     <button class="btn" id="btnBasemap">Подложка</button>
   </div>
+  <p><b>Весь Ташкент офлайн:</b> <span id="packInfo">…</span>. Один раз скачивает для векторной подложки карту, подписи и значки всего города на всех уровнях приближения. Маршруты без интернета не строятся.</p>
+  <div class="tools">
+    <button class="btn primary" id="btnPack">⬇ Скачать весь Ташкент</button>
+    <button class="btn" id="btnPackDelete" hidden>Удалить</button>
+  </div>
   <p>Векторная подложка чёткая на любом зуме, растровая проще для слабых телефонов. Офлайн: страница и просмотренные участки карты сохраняются автоматически. Кнопка ниже дозагружает текущий район: для векторной подложки это сразу все уровни приближения.</p>
   <div class="tools">
     <button class="btn" id="btnSaveArea">Сохранить район</button>
@@ -1334,7 +1339,7 @@ map.on('click', e => {
 });
 
 /* ---------- offline: service worker, tile prefetch, status ---------- */
-const APP_VERSION = '0a1f8774c0';
+const APP_VERSION = '8d6a3aa453';
 document.getElementById('buildVersion').textContent = APP_VERSION;
 function setOnline(){ document.body.classList.toggle('offline', !navigator.onLine); }
 window.addEventListener('online', () => { setOnline(); toast('Связь появилась'); fillMissingStreets(); });
@@ -1413,6 +1418,88 @@ document.getElementById('btnClearTiles').onclick = async () => {
   if (!confirm('Удалить сохранённые участки карты?')) return;
   await swMessage({type:'tiles-clear'}); refreshTileCount(); toast('Кэш карты очищен');
 };
+
+/* ---------- whole Tashkent offline: vector basemap pack (tiles, label fonts, sprites) ---------- */
+const PACK_CACHE = 'mapmot-pack-v1';
+const CITY_BOUNDS = L.latLngBounds([41.18, 69.10], [41.42, 69.45]);
+const PACK_ZOOMS = [9, 10, 11, 12, 13, 14]; // Leaflet z10..19 draws MapLibre z9..18; vector tiles stop at z14 and are overzoomed
+const FONT_RANGES = ['0-255', '256-511', '512-767', '1024-1279', '7680-7935', '8192-8447', '8448-8703']; // Latin, Uzbek ʻ, Cyrillic, quotes
+let packBusy = false;
+function tileXY(bounds, z){
+  const out = [], x0 = lon2x(bounds.getWest(), z), x1 = lon2x(bounds.getEast(), z), y0 = lat2y(bounds.getNorth(), z), y1 = lat2y(bounds.getSouth(), z);
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) out.push([x, y]);
+  return out;
+}
+function withPackFlag(u){ return u + (u.includes('?') ? '&' : '?') + 'mmpack=1'; } // tells the service worker not to cache it twice
+function readPackMeta(){ try { return JSON.parse(localStorage.getItem('mapmot.pack') || 'null'); } catch (e) { return null; } }
+async function refreshPackInfo(){
+  const info = document.getElementById('packInfo'), btn = document.getElementById('btnPack'), del = document.getElementById('btnPackDelete');
+  const meta = readPackMeta(), has = !!meta && 'caches' in window && await caches.has(PACK_CACHE);
+  let used = '';
+  try { const est = navigator.storage && await navigator.storage.estimate(); if (est && est.usage) used = ', приложение занимает ' + Math.round(est.usage / 1048576) + ' МБ'; } catch (e) {}
+  del.hidden = !has || packBusy;
+  if (!canVector) { info.textContent = 'недоступно, телефон не поддерживает векторную подложку'; btn.disabled = true; return; }
+  info.textContent = (has ? 'скачано ' + fmtDate(meta.date) + (meta.failed ? ', не докачано файлов: ' + meta.failed : '') : 'не скачано') + used;
+  if (!packBusy) btn.textContent = !has ? '⬇ Скачать весь Ташкент' : meta.failed ? '⬇ Докачать' : '⟳ Обновить';
+}
+async function downloadPack(){
+  if (packBusy || !canVector) return;
+  if (!navigator.onLine) { toast('Нет связи'); return; }
+  const btn = document.getElementById('btnPack');
+  const prev = readPackMeta(), refresh = !!prev && !prev.failed && await caches.has(PACK_CACHE); // complete pack: fetch everything again
+  packBusy = true; btn.disabled = true; btn.textContent = 'Готовлю список…'; document.getElementById('btnPackDelete').hidden = true;
+  try {
+    try { if (navigator.storage && navigator.storage.persist) await navigator.storage.persist(); } catch (e) {}
+    const cache = await caches.open(PACK_CACHE);
+    const style = await (await fetch(VECTOR_STYLE)).json();
+    const vec = style.sources.openmaptiles;
+    const tjRes = await fetch(withPackFlag(vec.url), {cache:'no-store'});
+    if (!tjRes.ok) throw new Error('TileJSON HTTP ' + tjRes.status);
+    const tj = await tjRes.clone().json();
+    await cache.put(vec.url, tjRes);
+    const jobs = [], add = (url, key) => jobs.push({url, key:key || url});
+    const tmpl = tj.tiles[0], sub = (t, z, x, y) => t.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+    PACK_ZOOMS.forEach(z => tileXY(CITY_BOUNDS, z).forEach(([x, y]) => add(sub(tmpl, z, x, y), 'https://tiles.openfreemap.org/planet/pack/' + z + '/' + x + '/' + y + '.pbf')));
+    Object.values(style.sources).filter(s => s.type === 'raster' && s.tiles).forEach(s => {
+      for (let z = 0; z <= Math.min(s.maxzoom || 6, 8); z++) tileXY(CITY_BOUNDS, z).forEach(([x, y]) => add(sub(s.tiles[0], z, x, y)));
+    });
+    if (style.sprite) ['', '@2x'].forEach(r => ['.json', '.png'].forEach(ext => add(style.sprite + r + ext)));
+    const stacks = new Set();
+    style.layers.forEach(l => { const f = l.layout && l.layout['text-font']; if (Array.isArray(f) && f.every(v => typeof v === 'string')) stacks.add(f.join(',')); });
+    stacks.forEach(s => FONT_RANGES.forEach(r => add(style.glyphs.replace('{fontstack}', s).replace('{range}', r))));
+    const todo = [];
+    for (const j of jobs) if (refresh || !(await cache.match(j.key))) todo.push(j); // resume: skip what is already stored
+    const total = jobs.length; let done = total - todo.length, failed = 0;
+    const show = () => { btn.textContent = 'Скачиваю… ' + Math.floor(done / total * 100) + '%'; };
+    show();
+    const worker = async () => {
+      while (todo.length) {
+        const j = todo.shift();
+        try {
+          const r = await fetch(withPackFlag(j.url), {mode:'cors'});
+          if (r.ok) await cache.put(j.key, r);
+          else if (r.status !== 404) failed++; // missing font ranges answer 404 and are fine
+        } catch (e) { failed++; }
+        done++; if (done % 5 === 0) show();
+      }
+    };
+    await Promise.all([1, 2, 3, 4, 5, 6].map(worker));
+    try { localStorage.setItem('mapmot.pack', JSON.stringify({date:today(), build:(tmpl.match(/planet\/([^/]+)\//) || [])[1] || '', files:total, failed})); } catch (e) {}
+    toast(failed ? 'Не скачалось файлов: ' + failed + '. Нажмите «Докачать»' : 'Весь Ташкент доступен офлайн');
+  } catch (e) {
+    toast('Не удалось скачать: ' + e.message);
+  } finally {
+    packBusy = false; btn.disabled = false; refreshPackInfo();
+  }
+}
+document.getElementById('btnPack').onclick = downloadPack;
+document.getElementById('btnPackDelete').onclick = async () => {
+  if (packBusy || !confirm('Удалить офлайн-карту Ташкента?')) return;
+  await caches.delete(PACK_CACHE);
+  try { localStorage.removeItem('mapmot.pack'); } catch (e) {}
+  refreshPackInfo(); toast('Офлайн-карта удалена');
+};
+refreshPackInfo();
 </script>
 </body>
 </html>
