@@ -1,5 +1,5 @@
 /* MapMot service worker: offline app shell + on-demand tile cache. */
-const VERSION = 'dd7ce0fe17';
+const VERSION = '3d1c7586af';
 const SHELL = 'mapmot-shell-' + VERSION;
 const TILES = 'mapmot-tiles-v1';
 const PACK = 'mapmot-pack-v1'; // "whole Tashkent offline": filled by the page, never trimmed, survives app updates
